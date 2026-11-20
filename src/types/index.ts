@@ -41,6 +41,7 @@ export interface Usuario {
     nav: Modulo[]
     acceso: Partial<Record<Modulo, Nivel>>
     permisos: Permisos
+    debeCambiarPassword: boolean
 }
 
 // ===== Gestión de usuarios (módulo del admin) =====
@@ -67,6 +68,16 @@ export interface NuevoUsuario {
     password: string
     rol: Rol
     permisos: Permisos
+    debeCambiarPassword: boolean
+}
+
+export interface RegistroBitacora {
+    _id: string
+    actor: string
+    accion: 'alta' | 'baja' | 'cambio' | 'password'
+    afectado: string
+    detalle: string[]
+    createdAt: string
 }
 
 // ===== Categorías (A-E) =====

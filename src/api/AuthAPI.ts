@@ -38,7 +38,9 @@ export async function actualizarPerfil(datos: { nombre: string; email?: string }
 
 export async function cambiarPassword(actual: string, nueva: string) {
     try {
-        const { data } = await api.put('/auth/perfil/password', { actual, nueva })
+        const { data } = await api.put<{ mensaje: string; token?: string }>('/auth/perfil/password', { actual, nueva })
+        // El servidor cierra las demás sesiones y entrega un token nuevo para esta
+        if (data.token) localStorage.setItem('TRIASO_TOKEN', data.token)
         return data
     } catch (error) {
         if (isAxiosError(error) && error.response) throw new Error(error.response.data.error ?? 'Error al cambiar la contraseña')

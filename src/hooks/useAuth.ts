@@ -9,7 +9,8 @@ export function useAuth() {
         queryKey: ['usuario'],
         queryFn: getPerfil,
         retry: 1,
-        refetchOnWindowFocus: false,
+        // Si el admin cambia el rol/permisos, se refleja al volver a la pestaña
+        refetchOnWindowFocus: true,
     })
 
     // ¿El usuario alcanza al menos `nivel` en `modulo`?

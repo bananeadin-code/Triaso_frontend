@@ -4,7 +4,7 @@ import { toast } from 'react-toastify'
 import { actualizarPerfil, cambiarPassword } from '../api/AuthAPI'
 import { useAuth } from '../hooks/useAuth'
 import { Button, Field, Input, PageHeader, Spinner } from '../components/ui'
-import { IconPerfil, IconLock } from '../components/icons'
+import { IconPerfil, IconLock, IconAlerta } from '../components/icons'
 
 export function PerfilView() {
     const { usuario } = useAuth()
@@ -39,6 +39,8 @@ export function PerfilView() {
         mutationFn: () => cambiarPassword(actual, nueva),
         onSuccess: () => {
             toast.success('Contraseña actualizada')
+            // Quita el bloqueo de contraseña temporal y recarga permisos
+            queryClient.invalidateQueries({ queryKey: ['usuario'] })
             setActual('')
             setNueva('')
             setRepetir('')
@@ -57,6 +59,18 @@ export function PerfilView() {
     return (
         <div className="mx-auto max-w-2xl">
             <PageHeader titulo="Mi perfil" descripcion="Actualiza tu nombre y tu contraseña" />
+
+            {usuario.debeCambiarPassword && (
+                <div className="mb-6 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                    <span className="mt-0.5 shrink-0">
+                        <IconAlerta />
+                    </span>
+                    <p>
+                        Tu contraseña es <strong>temporal</strong> (la asignó otra persona). Cámbiala para poder usar el
+                        sistema. En "Contraseña actual" escribe la que te dieron.
+                    </p>
+                </div>
+            )}
 
             {/* Datos de la cuenta */}
             <div className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">

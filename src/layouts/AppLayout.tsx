@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../hooks/useAuth'
 import { logout } from '../api/AuthAPI'
+import { EVENTO_ACCESO } from '../lib/axios'
 import { Logo } from '../components/Logo'
 import { SISTEMA } from '../config/marca'
 import type { Modulo } from '../types'
@@ -62,6 +63,13 @@ export function AppLayout() {
         mq.addEventListener('change', handler)
         return () => mq.removeEventListener('change', handler)
     }, [])
+
+    // Un 403 inesperado suele significar que el admin cambió el rol: se refresca perfil y menú
+    useEffect(() => {
+        const refrescar = () => queryClient.invalidateQueries({ queryKey: ['usuario'] })
+        window.addEventListener(EVENTO_ACCESO, refrescar)
+        return () => window.removeEventListener(EVENTO_ACCESO, refrescar)
+    }, [queryClient])
 
     const cerrarSesion = () => {
         logout()
