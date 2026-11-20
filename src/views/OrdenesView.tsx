@@ -1,27 +1,31 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'react-toastify'
 import {
     crearOrden,
     actualizarOrden,
+    cancelarOrden,
     confirmarRecepcion,
     descargarOrdenPDF,
     eliminarOrden,
     eliminarRecomendacion,
     finalizarRecomendacion,
     getOrden,
-    getOrdenes,
+    getOrdenesPagina,
     getRecomendaciones,
-    limpiarOrdenesCompletadas,
     marcarEnviada,
     registrarFaltantes,
 } from '../api/OrdenesAPI'
 import { getProveedores, getProveedor } from '../api/ProveedoresAPI'
 import { descargarReporte } from '../api/ReportesAPI'
 import { useAuth } from '../hooks/useAuth'
-import { Button, EmptyState, Field, Input, PageHeader, Select, Spinner } from '../components/ui'
+import { Buscador, Button, EmptyState, Field, Input, PageHeader, Select, Spinner } from '../components/ui'
 import { Modal } from '../components/Modal'
-import { IconAlerta, IconCheck, IconDownload, IconEdit, IconMail, IconMoneda, IconPlus, IconTrash } from '../components/icons'
+import { SelectBuscable } from '../components/SelectBuscable'
+import { Paginacion, POR_PAGINA, useRetrasado } from '../components/Paginacion'
+import { CamposPersonalizadosForm, TdCampos, ThCampos, useCamposModulo } from '../components/CamposPersonalizados'
+import { opcionesProveedor } from '../lib/opciones'
+import { IconAlerta, IconCheck, IconClose, IconDownload, IconEdit, IconMail, IconMoneda, IconPlus, IconTrash } from '../components/icons'
 import type { EstadoOrden, OrdenItemInput, OrdenListItem, Recomendacion } from '../types'
 
 // Mensajes de resultado del envío de correo
@@ -37,6 +41,10 @@ const CORREO_TOAST: Record<string, { tipo: 'success' | 'info' | 'warn'; msg: str
 }
 
 const money = (n: number) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n)
+const usd = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n)
+// Moneda de compra de un renglón: la elegida, o la principal del material.
+const monedaDe = (m: { moneda?: string; monedaPrincipal?: string }, sel?: { moneda?: 'mxn' | 'usd' }): 'mxn' | 'usd' =>
+    sel?.moneda ?? (m.monedaPrincipal === 'usd' ? 'usd' : m.monedaPrincipal === 'mxn' ? 'mxn' : m.moneda === 'usd' ? 'usd' : 'mxn')
 
 const ESTADO_STYLE: Record<EstadoOrden, string> = {
     borrador: 'bg-slate-100 text-slate-700',
@@ -53,9 +61,11 @@ const ESTADO_LABEL: Record<EstadoOrden, string> = {
 
 export function OrdenesView() {
     const { usuario, puede } = useAuth()
-    const puedeComprar = puede('ordenes', 'escritura')
+    const puedeCrear = puede('ordenes', 'crear')
+    // Enviar, marcar faltantes, ajustar costos, confirmar recepción y cancelar son ediciones de la orden
+    const puedeEditar = puede('ordenes', 'editar')
+    const puedeEliminar = puede('ordenes', 'eliminar')
     const puedeReporte = !!usuario?.permisos.generarReportes
-    const puedeLimpiar = !!usuario?.permisos.limpiarHistoriales
     const queryClient = useQueryClient()
 
     const [builderAbierto, setBuilderAbierto] = useState(false)
@@ -66,8 +76,19 @@ export function OrdenesView() {
     const [editandoCostos, setEditandoCostos] = useState<OrdenListItem | null>(null)
     const [confirmandoOrden, setConfirmandoOrden] = useState<OrdenListItem | null>(null)
     const [vista, setVista] = useState<'ordenes' | 'recomendaciones'>('ordenes')
+    const [busqueda, setBusqueda] = useState('')
+    const [filtroEstado, setFiltroEstado] = useState('')
+    const [pagina, setPagina] = useState(1)
 
-    const { data, isLoading } = useQuery({ queryKey: ['ordenes'], queryFn: getOrdenes })
+    // El servidor busca, filtra y pagina (las órdenes crecen sin límite con los años)
+    const q = useRetrasado(busqueda.trim())
+    useEffect(() => setPagina(1), [q, filtroEstado])
+    const { data, isLoading, isFetching } = useQuery({
+        queryKey: ['ordenes', 'pagina', pagina, q, filtroEstado],
+        queryFn: () => getOrdenesPagina(pagina, POR_PAGINA, { q, estado: filtroEstado }),
+        placeholderData: keepPreviousData,
+    })
+    const { campos: camposActivos } = useCamposModulo('ordenes')
     const recomendaciones = useQuery({ queryKey: ['recomendaciones'], queryFn: getRecomendaciones })
     const numRecs = recomendaciones.data?.length ?? 0
 
@@ -80,10 +101,10 @@ export function OrdenesView() {
         onError: (e: Error) => toast.error(e.message),
     })
 
-    const limpiar = useMutation({
-        mutationFn: limpiarOrdenesCompletadas,
+    const cancelar = useMutation({
+        mutationFn: ({ id, motivo }: { id: string; motivo: string | null }) => cancelarOrden(id, motivo ?? undefined),
         onSuccess: (res) => {
-            toast.success(`${res.mensaje}: ${res.eliminadas}`)
+            toast.success(res.mensaje)
             queryClient.invalidateQueries({ queryKey: ['ordenes'] })
         },
         onError: (e: Error) => toast.error(e.message),
@@ -103,7 +124,8 @@ export function OrdenesView() {
     })
 
     if (isLoading) return <Spinner label="Cargando órdenes…" />
-    const ordenes = data ?? []
+    const ordenes = data?.items ?? []
+    const hayFiltros = !!(q || filtroEstado)
 
     return (
         <div>
@@ -122,32 +144,15 @@ export function OrdenesView() {
                                 <IconDownload /> Reporte PDF
                             </Button>
                         )}
-                        {puedeComprar && (
-                            <>
-                                {puedeLimpiar && ordenes.some((o) => o.estado === 'confirmada') && (
-                                    <Button
-                                        variant="secondary"
-                                        onClick={() => {
-                                            if (
-                                                confirm(
-                                                    '¿Eliminar las órdenes completadas con más de 90 días de antigüedad?'
-                                                )
-                                            )
-                                                limpiar.mutate()
-                                        }}
-                                    >
-                                        <IconTrash /> Limpiar completadas (+90 días)
-                                    </Button>
-                                )}
-                                <Button
-                                    onClick={() => {
-                                        setEditandoId(null)
-                                        setBuilderAbierto(true)
-                                    }}
-                                >
-                                    <IconPlus /> Nueva orden
-                                </Button>
-                            </>
+                        {puedeCrear && (
+                            <Button
+                                onClick={() => {
+                                    setEditandoId(null)
+                                    setBuilderAbierto(true)
+                                }}
+                            >
+                                <IconPlus /> Nueva orden
+                            </Button>
                         )}
                     </div>
                 }
@@ -186,14 +191,37 @@ export function OrdenesView() {
                 <RecomendacionesPanel
                     recomendaciones={recomendaciones.data ?? []}
                     cargando={recomendaciones.isLoading}
-                    puedeComprar={puedeComprar}
+                    puedeCrear={puedeCrear}
+                    puedeEliminar={puedeEliminar}
                 />
             )}
 
             {vista === 'ordenes' && (
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <>
+            {/* Buscador + filtro por estado */}
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div className="sm:max-w-xs sm:flex-1">
+                    <Buscador value={busqueda} onChange={setBusqueda} placeholder="Buscar por folio, proveedor o cotización…" />
+                </div>
+                <Select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)} className="sm:w-52">
+                    <option value="">Todos los estados</option>
+                    <option value="borrador">Borrador</option>
+                    <option value="enviada">Enviada</option>
+                    <option value="confirmada">Confirmada</option>
+                    <option value="cancelada">Cancelada</option>
+                </Select>
+            </div>
+
+            <div className={`overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm ${isFetching ? 'opacity-70' : ''}`}>
                 {ordenes.length === 0 ? (
-                    <EmptyState titulo="Sin órdenes" descripcion="Crea tu primera orden de compra a un proveedor." />
+                    <EmptyState
+                        titulo="Sin órdenes"
+                        descripcion={
+                            hayFiltros
+                                ? 'Ninguna orden coincide con la búsqueda.'
+                                : 'Crea tu primera orden de compra a un proveedor.'
+                        }
+                    />
                 ) : (
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm">
@@ -204,7 +232,8 @@ export function OrdenesView() {
                                     <th className="px-4 py-3 text-center">Estado</th>
                                     <th className="px-4 py-3 text-center">Materiales</th>
                                     <th className="px-4 py-3 text-right">Total estimado</th>
-                                    {puedeComprar && <th className="px-4 py-3 text-right">Acciones</th>}
+                                    <ThCampos campos={camposActivos} />
+                                    <th className="px-4 py-3 text-right">Acciones</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -216,6 +245,9 @@ export function OrdenesView() {
                                                 <span className="mt-0.5 inline-block rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
                                                     de {o.folioCotizacion}
                                                 </span>
+                                            )}
+                                            {o.creadoPor && (
+                                                <div className="mt-0.5 text-[11px] text-slate-400">por {o.creadoPor}</div>
                                             )}
                                         </td>
                                         <td className="px-4 py-3">
@@ -249,10 +281,10 @@ export function OrdenesView() {
                                                 money(o.presupuestoEstimado)
                                             )}
                                         </td>
-                                        {puedeComprar && (
-                                            <td className="px-4 py-3">
+                                        <TdCampos campos={camposActivos} valores={o.personalizados} className="px-4 py-3 text-slate-500" />
+                                        <td className="px-4 py-3">
                                                 <div className="flex justify-end gap-1">
-                                                    {o.estado === 'borrador' && (
+                                                    {puedeEditar && o.estado === 'borrador' && (
                                                         <>
                                                             <button
                                                                 onClick={() => setOrdenAEnviar(o)}
@@ -273,7 +305,7 @@ export function OrdenesView() {
                                                             </button>
                                                         </>
                                                     )}
-                                                    {o.estado === 'enviada' && (
+                                                    {puedeEditar && o.estado === 'enviada' && (
                                                         <>
                                                             <button
                                                                 onClick={() => setFaltantesOrden(o)}
@@ -314,10 +346,24 @@ export function OrdenesView() {
                                                             <IconDownload />
                                                         </button>
                                                     )}
-                                                    {o.estado !== 'confirmada' && (
+                                                    {puedeEditar && (o.estado === 'borrador' || o.estado === 'enviada') && (
                                                         <button
                                                             onClick={() => {
-                                                                if (confirm(`¿Eliminar la orden ${o.folio}?`))
+                                                                const motivo = prompt(
+                                                                    `Cancelar la orden ${o.folio}. ¿Motivo? (opcional)\n\nSe conserva el registro; para borrarla del todo usa Eliminar.`
+                                                                )
+                                                                if (motivo !== null) cancelar.mutate({ id: o._id, motivo })
+                                                            }}
+                                                            className="rounded-md p-2 text-slate-500 hover:bg-amber-50 hover:text-amber-600"
+                                                            title="Cancelar orden (conserva el registro)"
+                                                        >
+                                                            <IconClose />
+                                                        </button>
+                                                    )}
+                                                    {puedeEliminar && o.estado !== 'confirmada' && (
+                                                        <button
+                                                            onClick={() => {
+                                                                if (confirm(`¿Eliminar la orden ${o.folio}? Se borra del historial.`))
                                                                     eliminar.mutate(o._id)
                                                             }}
                                                             className="rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600"
@@ -328,14 +374,17 @@ export function OrdenesView() {
                                                     )}
                                                 </div>
                                             </td>
-                                        )}
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
                     </div>
                 )}
+                {data && (
+                    <Paginacion pagina={data.pagina} paginas={data.paginas} total={data.total} limite={data.limite} onPagina={setPagina} />
+                )}
             </div>
+            </>
             )}
 
             {faltantesOrden && (
@@ -393,6 +442,10 @@ export function OrdenesView() {
                     onSaved={() => {
                         setBuilderAbierto(false)
                         queryClient.invalidateQueries({ queryKey: ['ordenes'] })
+                        // Si se eligió actualizar costos en todo el sistema, refrescar catálogo y BOM
+                        queryClient.invalidateQueries({ queryKey: ['materiales'] })
+                        queryClient.invalidateQueries({ queryKey: ['componentes'] })
+                        queryClient.invalidateQueries({ queryKey: ['proveedor'] })
                     }}
                 />
             )}
@@ -464,8 +517,11 @@ function EnviarModal({
 interface Seleccion {
     checked: boolean
     cantidad: number
+    moneda?: 'mxn' | 'usd'
     costo?: number
     costoOriginal?: number
+    costoUSD?: number
+    costoOriginalUSD?: number
 }
 
 // Cambio de costo detectado para preguntar si se actualiza en todo el sistema
@@ -475,6 +531,8 @@ interface CambioCosto {
     concepto: string
     costoAnterior: number
     costoNuevo: number
+    costoAnteriorUSD: number
+    costoNuevoUSD: number
 }
 
 function OrdenBuilderModal({
@@ -499,6 +557,8 @@ function OrdenBuilderModal({
     const [selecciones, setSelecciones] = useState<Record<string, Seleccion>>({})
     const [totalManual, setTotalManual] = useState<number | null>(null)
     const [guardando, setGuardando] = useState(false)
+    const { campos: camposPers } = useCamposModulo('ordenes')
+    const [pers, setPers] = useState<Record<string, unknown>>({})
     const [pendiente, setPendiente] = useState<{ items: OrdenItemInput[]; cambios: CambioCosto[] } | null>(null)
 
     // Materiales asociados al proveedor elegido
@@ -521,10 +581,13 @@ function OrdenBuilderModal({
                         cantidad: it.cantidad,
                         costo: it.costoUnitario,
                         costoOriginal: it.costoUnitario,
+                        costoUSD: it.costoUnitarioUSD ?? 0,
+                        costoOriginalUSD: it.costoUnitarioUSD ?? 0,
                     }
             })
             setSelecciones(sel)
             setTotalManual(ordenExistente.data.presupuestoEstimado)
+            setPers(ordenExistente.data.personalizados ?? {})
         }
     }, [ordenExistente.data])
 
@@ -534,13 +597,17 @@ function OrdenBuilderModal({
             return { ...s, [id]: { ...prev, ...patch } }
         })
 
-    // Subtotal calculado a partir de las selecciones (usa el costo editado)
-    const subtotal = useMemo(() => {
-        return materiales.reduce((acc, m) => {
+    // Subtotales calculados por moneda (cada renglón cuenta en la suya)
+    const { subtotal, subtotalUSD } = useMemo(() => {
+        let mxn = 0
+        let usdTot = 0
+        for (const m of materiales) {
             const sel = selecciones[m._id]
-            if (sel?.checked) acc += (sel.cantidad || 0) * (sel.costo ?? m.costoUnitario)
-            return acc
-        }, 0)
+            if (!sel?.checked) continue
+            if (monedaDe(m, sel) === 'usd') usdTot += (sel.cantidad || 0) * (sel.costoUSD ?? m.costoUSD ?? 0)
+            else mxn += (sel.cantidad || 0) * (sel.costo ?? m.costoUnitario)
+        }
+        return { subtotal: mxn, subtotalUSD: usdTot }
     }, [materiales, selecciones])
 
     const totalEstimado = totalManual ?? subtotal
@@ -555,16 +622,28 @@ function OrdenBuilderModal({
         const items: OrdenItemInput[] = seleccionados.map((m) => ({
             material: m._id,
             cantidad: selecciones[m._id].cantidad,
+            moneda: monedaDe(m, selecciones[m._id]),
             costoUnitario: selecciones[m._id].costo ?? m.costoUnitario,
+            costoUnitarioUSD: selecciones[m._id].costoUSD ?? m.costoUSD ?? 0,
         }))
-        // Detecta costos que el usuario cambió respecto a su valor original/catálogo
+        // Detecta costos (MXN y/o USD) que el usuario cambió respecto a su valor original/catálogo
         const cambios: CambioCosto[] = seleccionados
             .map((m) => {
                 const costoNuevo = selecciones[m._id].costo ?? m.costoUnitario
                 const costoAnterior = selecciones[m._id].costoOriginal ?? m.costoUnitario
-                return { material: m._id, clave: m.clave, concepto: m.concepto, costoAnterior, costoNuevo }
+                const costoNuevoUSD = selecciones[m._id].costoUSD ?? m.costoUSD ?? 0
+                const costoAnteriorUSD = selecciones[m._id].costoOriginalUSD ?? m.costoUSD ?? 0
+                return {
+                    material: m._id,
+                    clave: m.clave,
+                    concepto: m.concepto,
+                    costoAnterior,
+                    costoNuevo,
+                    costoAnteriorUSD,
+                    costoNuevoUSD,
+                }
             })
-            .filter((c) => c.costoNuevo !== c.costoAnterior)
+            .filter((c) => c.costoNuevo !== c.costoAnterior || c.costoNuevoUSD !== c.costoAnteriorUSD)
 
         if (cambios.length > 0) {
             setPendiente({ items, cambios })
@@ -577,10 +656,21 @@ function OrdenBuilderModal({
         setGuardando(true)
         try {
             if (esEdicion && ordenId) {
-                const res = await actualizarOrden(ordenId, { items, presupuestoEstimado: totalEstimado, materialesGlobal })
+                const res = await actualizarOrden(ordenId, {
+                    items,
+                    presupuestoEstimado: totalEstimado,
+                    materialesGlobal,
+                    personalizados: pers,
+                })
                 toast.success(res.mensaje)
             } else {
-                const res = await crearOrden({ proveedor: proveedorId, items, presupuestoEstimado: totalEstimado, materialesGlobal })
+                const res = await crearOrden({
+                    proveedor: proveedorId,
+                    items,
+                    presupuestoEstimado: totalEstimado,
+                    materialesGlobal,
+                    personalizados: pers,
+                })
                 toast.success(`${res.mensaje} · ${res.folio}`)
             }
             setPendiente(null)
@@ -601,22 +691,18 @@ function OrdenBuilderModal({
             ) : (
                 <div className="space-y-4">
                     <Field label="Proveedor" required>
-                        <Select
+                        <SelectBuscable
                             value={proveedorId}
-                            onChange={(e) => {
-                                setProveedorId(e.target.value)
+                            onChange={(v) => {
+                                if (v === proveedorId) return
+                                setProveedorId(v)
                                 setSelecciones({})
                                 setTotalManual(null)
                             }}
+                            opciones={opcionesProveedor(proveedores.data ?? [])}
+                            placeholder="Buscar proveedor por código, razón social o RFC…"
                             disabled={esEdicion}
-                        >
-                            <option value="">— Selecciona un proveedor —</option>
-                            {(proveedores.data ?? []).map((p) => (
-                                <option key={p._id} value={p._id}>
-                                    {p.codigo} · {p.razonSocial}
-                                </option>
-                            ))}
-                        </Select>
+                        />
                     </Field>
 
                     {proveedorId && (
@@ -638,7 +724,8 @@ function OrdenBuilderModal({
                                                 <th className="px-3 py-2"></th>
                                                 <th className="px-3 py-2">Clave</th>
                                                 <th className="px-3 py-2">Concepto</th>
-                                                <th className="px-3 py-2 text-right">Costo unit.</th>
+                                                <th className="px-3 py-2 text-right">Costo MXN</th>
+                                                <th className="px-3 py-2 text-right">Costo USD</th>
                                                 <th className="px-3 py-2 text-center">Cantidad</th>
                                                 <th className="px-3 py-2 text-right">Importe</th>
                                             </tr>
@@ -649,6 +736,9 @@ function OrdenBuilderModal({
                                                 const checked = sel?.checked ?? false
                                                 const cantidad = sel?.cantidad ?? 1
                                                 const costo = sel?.costo ?? m.costoUnitario
+                                                const costoUSD = sel?.costoUSD ?? m.costoUSD ?? 0
+                                                const mon = monedaDe(m, sel)
+                                                const esAmbos = m.moneda === 'ambos'
                                                 return (
                                                     <tr key={m._id} className={checked ? 'bg-brand-50/40' : ''}>
                                                         <td className="px-3 py-2">
@@ -664,18 +754,52 @@ function OrdenBuilderModal({
                                                         <td className="px-3 py-2 font-mono font-semibold text-brand-700">
                                                             {m.clave}
                                                         </td>
-                                                        <td className="px-3 py-2 text-slate-700">{m.concepto}</td>
+                                                        <td className="px-3 py-2 text-slate-700">
+                                                            {m.concepto}
+                                                            {esAmbos && checked && (
+                                                                <div className="mt-1 flex gap-1">
+                                                                    {(['mxn', 'usd'] as const).map((mc) => (
+                                                                        <button
+                                                                            key={mc}
+                                                                            type="button"
+                                                                            onClick={() => setSel(m._id, { moneda: mc })}
+                                                                            className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                                                                                mon === mc
+                                                                                    ? 'bg-brand-600 text-white'
+                                                                                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                                                                            }`}
+                                                                            title="Moneda en que se compra este material"
+                                                                        >
+                                                                            {mc === 'mxn' ? 'Pesos' : 'Dólares'}
+                                                                        </button>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                        </td>
                                                         <td className="px-3 py-2 text-right">
                                                             <input
                                                                 type="number"
                                                                 step="0.01"
                                                                 min="0"
                                                                 value={costo}
-                                                                disabled={!checked}
+                                                                disabled={!checked || mon !== 'mxn'}
                                                                 onChange={(e) =>
                                                                     setSel(m._id, { costo: Number(e.target.value) })
                                                                 }
-                                                                className="w-24 rounded border border-slate-300 px-2 py-1 text-right disabled:bg-slate-100"
+                                                                className="w-24 rounded border border-slate-300 px-2 py-1 text-right disabled:bg-slate-100 disabled:text-slate-300"
+                                                            />
+                                                        </td>
+                                                        <td className="px-3 py-2 text-right">
+                                                            <input
+                                                                type="number"
+                                                                step="0.01"
+                                                                min="0"
+                                                                value={costoUSD}
+                                                                disabled={!checked || mon !== 'usd'}
+                                                                onChange={(e) =>
+                                                                    setSel(m._id, { costoUSD: Number(e.target.value) })
+                                                                }
+                                                                className="w-24 rounded border border-slate-300 px-2 py-1 text-right disabled:bg-slate-100 disabled:text-slate-300"
                                                             />
                                                         </td>
                                                         <td className="px-3 py-2 text-center">
@@ -693,7 +817,11 @@ function OrdenBuilderModal({
                                                             />
                                                         </td>
                                                         <td className="px-3 py-2 text-right font-medium text-slate-800">
-                                                            {checked ? money(cantidad * costo) : '—'}
+                                                            {checked
+                                                                ? mon === 'usd'
+                                                                    ? usd(cantidad * costoUSD)
+                                                                    : money(cantidad * costo)
+                                                                : '—'}
                                                         </td>
                                                     </tr>
                                                 )
@@ -709,6 +837,9 @@ function OrdenBuilderModal({
                         <div className="flex flex-col items-end gap-2 border-t border-slate-200 pt-4">
                             <div className="text-sm text-slate-500">
                                 Subtotal calculado: <span className="font-semibold text-slate-700">{money(subtotal)}</span>
+                                {subtotalUSD > 0 && (
+                                    <span className="font-semibold text-slate-700"> + {usd(subtotalUSD)}</span>
+                                )}
                             </div>
                             <div className="flex items-center gap-3">
                                 <span className="text-sm font-medium text-slate-700">Total estimado (editable):</span>
@@ -732,6 +863,9 @@ function OrdenBuilderModal({
                             </div>
                         </div>
                     )}
+
+                    {/* Campos personalizados de la orden (informativos) */}
+                    <CamposPersonalizadosForm campos={camposPers} valores={pers} onChange={setPers} columnas={3} />
 
                     <div className="flex justify-end gap-3 border-t border-slate-200 pt-4">
                         <Button type="button" variant="secondary" onClick={onClose}>
@@ -769,6 +903,7 @@ function ActualizarCostosGlobalModal({
 }) {
     const [sel, setSel] = useState<string[]>([])
     const money2 = (n: number) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n)
+    const usd2 = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n)
 
     return (
         <Modal open onClose={onCancelar} titulo="Cambiaron costos de materiales" ancho="max-w-lg">
@@ -793,8 +928,19 @@ function ActualizarCostosGlobalModal({
                         />
                         <span className="font-mono text-sm font-semibold text-brand-700">{c.clave}</span>
                         <span className="flex-1 truncate text-sm text-slate-700">{c.concepto}</span>
-                        <span className="text-sm text-slate-500">
-                            {money2(c.costoAnterior)} → <span className="font-semibold text-navy-900">{money2(c.costoNuevo)}</span>
+                        <span className="text-right text-sm leading-tight text-slate-500">
+                            {c.costoNuevo !== c.costoAnterior && (
+                                <span className="block">
+                                    {money2(c.costoAnterior)} →{' '}
+                                    <span className="font-semibold text-navy-900">{money2(c.costoNuevo)}</span>
+                                </span>
+                            )}
+                            {c.costoNuevoUSD !== c.costoAnteriorUSD && (
+                                <span className="block">
+                                    {usd2(c.costoAnteriorUSD)} →{' '}
+                                    <span className="font-semibold text-navy-900">{usd2(c.costoNuevoUSD)}</span>
+                                </span>
+                            )}
                         </span>
                     </label>
                 ))}
@@ -824,6 +970,8 @@ function EditarCostosModal({
     const detalle = useQuery({ queryKey: ['orden', orden._id], queryFn: () => getOrden(orden._id) })
     const [costos, setCostos] = useState<Record<string, number>>({})
     const [orig, setOrig] = useState<Record<string, number>>({})
+    const [costosUSD, setCostosUSD] = useState<Record<string, number>>({})
+    const [origUSD, setOrigUSD] = useState<Record<string, number>>({})
     const [guardando, setGuardando] = useState(false)
     const [pendiente, setPendiente] = useState<{ items: OrdenItemInput[]; cambios: CambioCosto[] } | null>(null)
 
@@ -832,26 +980,47 @@ function EditarCostosModal({
     useEffect(() => {
         if (detalle.data) {
             const c: Record<string, number> = {}
+            const cu: Record<string, number> = {}
             detalle.data.items.forEach((it) => {
-                if (it.material) c[it.material] = it.costoUnitario
+                if (it.material) {
+                    c[it.material] = it.costoUnitario
+                    cu[it.material] = it.costoUnitarioUSD ?? 0
+                }
             })
             setCostos(c)
             setOrig({ ...c })
+            setCostosUSD(cu)
+            setOrigUSD({ ...cu })
         }
     }, [detalle.data])
 
     const guardar = () => {
         const its: OrdenItemInput[] = items
             .filter((it) => it.material)
-            .map((it) => ({ material: it.material as string, cantidad: it.cantidad, costoUnitario: costos[it.material!] ?? it.costoUnitario }))
+            .map((it) => ({
+                material: it.material as string,
+                cantidad: it.cantidad,
+                costoUnitario: costos[it.material!] ?? it.costoUnitario,
+                costoUnitarioUSD: costosUSD[it.material!] ?? it.costoUnitarioUSD ?? 0,
+            }))
         const cambios: CambioCosto[] = items
             .filter((it) => it.material)
             .map((it) => {
                 const nuevo = costos[it.material!] ?? it.costoUnitario
                 const ant = orig[it.material!] ?? it.costoUnitario
-                return { material: it.material!, clave: it.clave, concepto: it.concepto, costoAnterior: ant, costoNuevo: nuevo }
+                const nuevoUSD = costosUSD[it.material!] ?? it.costoUnitarioUSD ?? 0
+                const antUSD = origUSD[it.material!] ?? it.costoUnitarioUSD ?? 0
+                return {
+                    material: it.material!,
+                    clave: it.clave,
+                    concepto: it.concepto,
+                    costoAnterior: ant,
+                    costoNuevo: nuevo,
+                    costoAnteriorUSD: antUSD,
+                    costoNuevoUSD: nuevoUSD,
+                }
             })
-            .filter((c) => c.costoNuevo !== c.costoAnterior)
+            .filter((c) => c.costoNuevo !== c.costoAnterior || c.costoNuevoUSD !== c.costoAnteriorUSD)
 
         if (cambios.length > 0) {
             setPendiente({ items: its, cambios })
@@ -890,7 +1059,8 @@ function EditarCostosModal({
                                     <th className="px-3 py-2">Clave</th>
                                     <th className="px-3 py-2">Concepto</th>
                                     <th className="px-3 py-2 text-center">Cant.</th>
-                                    <th className="px-3 py-2 text-right">Costo unit.</th>
+                                    <th className="px-3 py-2 text-right">Costo MXN</th>
+                                    <th className="px-3 py-2 text-right">Costo USD</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -905,11 +1075,30 @@ function EditarCostosModal({
                                                 step="0.01"
                                                 min="0"
                                                 value={it.material ? (costos[it.material] ?? it.costoUnitario) : it.costoUnitario}
+                                                disabled={it.moneda === 'usd'}
                                                 onChange={(e) =>
                                                     it.material &&
                                                     setCostos((s) => ({ ...s, [it.material!]: Number(e.target.value) }))
                                                 }
-                                                className="w-28 rounded border border-slate-300 px-2 py-1 text-right"
+                                                className="w-28 rounded border border-slate-300 px-2 py-1 text-right disabled:bg-slate-100 disabled:text-slate-300"
+                                            />
+                                        </td>
+                                        <td className="px-3 py-2 text-right">
+                                            <input
+                                                type="number"
+                                                step="0.01"
+                                                min="0"
+                                                value={
+                                                    it.material
+                                                        ? (costosUSD[it.material] ?? it.costoUnitarioUSD ?? 0)
+                                                        : (it.costoUnitarioUSD ?? 0)
+                                                }
+                                                disabled={it.moneda !== 'usd'}
+                                                onChange={(e) =>
+                                                    it.material &&
+                                                    setCostosUSD((s) => ({ ...s, [it.material!]: Number(e.target.value) }))
+                                                }
+                                                className="w-28 rounded border border-slate-300 px-2 py-1 text-right disabled:bg-slate-100 disabled:text-slate-300"
                                             />
                                         </td>
                                     </tr>
@@ -1226,11 +1415,13 @@ function ConfirmarRecepcionModal({
 function RecomendacionesPanel({
     recomendaciones,
     cargando,
-    puedeComprar,
+    puedeCrear,
+    puedeEliminar,
 }: {
     recomendaciones: Recomendacion[]
     cargando: boolean
-    puedeComprar: boolean
+    puedeCrear: boolean
+    puedeEliminar: boolean
 }) {
     const queryClient = useQueryClient()
 
@@ -1287,19 +1478,23 @@ function RecomendacionesPanel({
                             </li>
                         ))}
                     </ul>
-                    {puedeComprar && (
+                    {(puedeCrear || puedeEliminar) && (
                         <div className="flex justify-end gap-2 border-t border-slate-200 pt-3">
-                            <Button
-                                variant="secondary"
-                                onClick={() => {
-                                    if (confirm('¿Descartar esta recomendación?')) descartar.mutate(r._id)
-                                }}
-                            >
-                                Descartar
-                            </Button>
-                            <Button onClick={() => finalizar.mutate(r._id)} disabled={finalizar.isPending}>
-                                Crear orden
-                            </Button>
+                            {puedeEliminar && (
+                                <Button
+                                    variant="secondary"
+                                    onClick={() => {
+                                        if (confirm('¿Descartar esta recomendación?')) descartar.mutate(r._id)
+                                    }}
+                                >
+                                    Descartar
+                                </Button>
+                            )}
+                            {puedeCrear && (
+                                <Button onClick={() => finalizar.mutate(r._id)} disabled={finalizar.isPending}>
+                                    Crear orden
+                                </Button>
+                            )}
                         </div>
                     )}
                 </div>

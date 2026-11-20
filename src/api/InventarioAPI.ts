@@ -14,7 +14,7 @@ export async function getInventario() {
     return data
 }
 
-export async function agregarInventario(datos: { material: string; cantidad: number; ubicacion?: string }) {
+export async function agregarInventario(datos: { material: string; cantidad: number; ubicacion?: string; motivo?: string; personalizados?: Record<string, unknown> }) {
     try {
         const { data } = await api.post('/inventario', datos)
         return data
@@ -23,7 +23,10 @@ export async function agregarInventario(datos: { material: string; cantidad: num
     }
 }
 
-export async function actualizarInventario(id: string, datos: { cantidad?: number; ubicacion?: string }) {
+export async function actualizarInventario(
+    id: string,
+    datos: { cantidad?: number; ubicacion?: string; motivo?: string; personalizados?: Record<string, unknown> }
+) {
     try {
         const { data } = await api.put(`/inventario/${id}`, datos)
         return data

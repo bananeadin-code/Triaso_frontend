@@ -8,13 +8,19 @@ import { crearCotizacion } from '../api/CotizacionesAPI'
 import { useAuth } from '../hooks/useAuth'
 import { Buscador, Button, EmptyState, Field, Input, PageHeader, Spinner } from '../components/ui'
 import { Modal } from '../components/Modal'
-import { IconCotizacion, IconEye, IconPlus, IconTrash } from '../components/icons'
+import { Paginacion, usePaginacionLocal } from '../components/Paginacion'
+import { BadgePorValidar, BotonValidar, FiltroPorValidar, usePorValidar } from '../components/PorValidar'
+import { CamposPersonalizadosForm, TdCampos, ThCampos, useCamposModulo } from '../components/CamposPersonalizados'
+import { IconCotizacion, IconEye, IconPlus, IconTrash, IconUpload } from '../components/icons'
 import type { EquipoListItem, LineaInput } from '../types'
 
 export function EquiposView() {
     const { puede } = useAuth()
-    const puedeEditar = puede('equipos', 'escritura')
-    const puedeCotizar = puede('cotizaciones', 'escritura')
+    const puedeCrear = puede('equipos', 'crear')
+    const puedeEliminar = puede('equipos', 'eliminar')
+    const puedeCotizar = puede('cotizaciones', 'crear')
+    // Importar un BOM crea registros en cuatro catálogos
+    const puedeImportar = (['equipos', 'componentes', 'materiales', 'proveedores'] as const).every((m) => puede(m, 'crear'))
     const queryClient = useQueryClient()
     const navigate = useNavigate()
     const [modalAbierto, setModalAbierto] = useState(false)
@@ -22,6 +28,7 @@ export function EquiposView() {
     const [busqueda, setBusqueda] = useState('')
 
     const { data, isLoading } = useQuery({ queryKey: ['equipos'], queryFn: getEquipos })
+    const { campos: camposActivos } = useCamposModulo('equipos')
 
     const eliminar = useMutation({
         mutationFn: eliminarEquipo,
@@ -32,8 +39,11 @@ export function EquiposView() {
         onError: (e: Error) => toast.error(e.message),
     })
 
+    const pv = usePorValidar('equipos', data ?? [])
+    const puedeValidar = puede('equipos', 'editar')
+    const equipos = pv.filtrar(data ?? []).filter((e) => e.nombre.toLowerCase().includes(busqueda.toLowerCase()))
+    const { visibles, control } = usePaginacionLocal(equipos)
     if (isLoading) return <Spinner label="Cargando equipos…" />
-    const equipos = (data ?? []).filter((e) => e.nombre.toLowerCase().includes(busqueda.toLowerCase()))
 
     return (
         <div>
@@ -41,16 +51,32 @@ export function EquiposView() {
                 titulo="Equipos (BOM)"
                 descripcion="Equipos finales, su lista de materiales y cotización por categoría"
                 accion={
-                    puedeEditar && (
-                        <Button onClick={() => setModalAbierto(true)}>
-                            <IconPlus /> Nuevo equipo
-                        </Button>
+                    puedeCrear && (
+                        <div className="flex flex-wrap gap-2">
+                            {puedeImportar && (
+                                <Button variant="secondary" onClick={() => navigate('/equipos/importar')}>
+                                    <IconUpload /> Importar BOM (Excel)
+                                </Button>
+                            )}
+                            <Button onClick={() => setModalAbierto(true)}>
+                                <IconPlus /> Nuevo equipo
+                            </Button>
+                        </div>
                     )
                 }
             />
 
-            <div className="mb-4">
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
                 <Buscador value={busqueda} onChange={setBusqueda} placeholder="Buscar equipo por nombre…" />
+                <FiltroPorValidar
+                    pendientes={pv.pendientes}
+                    solo={pv.solo}
+                    onSolo={pv.setSolo}
+                    mostrados={equipos.length}
+                    onValidarTodos={() => pv.validar.mutate(equipos.filter((e) => e.porValidar).map((e) => e._id))}
+                    puedeValidar={puedeValidar}
+                    validando={pv.validar.isPending}
+                />
             </div>
 
             <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -65,20 +91,25 @@ export function EquiposView() {
                                     <th className="px-4 py-3">Tipo</th>
                                     <th className="px-4 py-3">Descripción</th>
                                     <th className="px-4 py-3 text-center">Líneas BOM</th>
+                                    <ThCampos campos={camposActivos} />
                                     <th className="px-4 py-3 text-right">Acciones</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
-                                {equipos.map((e) => (
+                                {visibles.map((e) => (
                                     <tr
                                         key={e._id}
                                         className="cursor-pointer transition-colors hover:bg-slate-50"
                                         onClick={() => navigate(`/equipos/${e._id}`)}
                                     >
-                                        <td className="px-4 py-3 font-semibold text-navy-900">{e.nombre}</td>
+                                        <td className="px-4 py-3 font-semibold text-navy-900">
+                                            {e.nombre}
+                                            {e.porValidar && <BadgePorValidar />}
+                                        </td>
                                         <td className="px-4 py-3 text-slate-600">{e.tipo || '—'}</td>
                                         <td className="px-4 py-3 text-slate-500">{e.descripcion || '—'}</td>
                                         <td className="px-4 py-3 text-center text-slate-600">{e.totalLineas}</td>
+                                        <TdCampos campos={camposActivos} valores={e.personalizados} className="px-4 py-3 text-slate-500" />
                                         <td className="px-4 py-3" onClick={(ev) => ev.stopPropagation()}>
                                             <div className="flex justify-end gap-1">
                                                 <button
@@ -97,7 +128,10 @@ export function EquiposView() {
                                                         <IconCotizacion />
                                                     </button>
                                                 )}
-                                                {puedeEditar && (
+                                                {puedeValidar && e.porValidar && (
+                                                    <BotonValidar onClick={() => pv.validar.mutate([e._id])} disabled={pv.validar.isPending} />
+                                                )}
+                                                {puedeEliminar && (
                                                     <button
                                                         onClick={() => {
                                                             if (confirm(`¿Eliminar el equipo "${e.nombre}"?`))
@@ -117,6 +151,7 @@ export function EquiposView() {
                         </table>
                     </div>
                 )}
+                <Paginacion {...control} />
             </div>
 
             {modalAbierto && (
@@ -255,6 +290,8 @@ function CotizarModal({
 }
 
 function NuevoEquipoModal({ onClose, onCreado }: { onClose: () => void; onCreado: (id: string) => void }) {
+    const { campos } = useCamposModulo('equipos')
+    const [pers, setPers] = useState<Record<string, unknown>>({})
     const {
         register,
         handleSubmit,
@@ -265,7 +302,7 @@ function NuevoEquipoModal({ onClose, onCreado }: { onClose: () => void; onCreado
 
     const onSubmit = async (datos: { nombre: string; tipo: string; descripcion: string }) => {
         try {
-            const res = await crearEquipo(datos)
+            const res = await crearEquipo({ ...datos, personalizados: pers })
             toast.success(res.mensaje)
             onCreado(res.id)
         } catch (e) {
@@ -288,6 +325,7 @@ function NuevoEquipoModal({ onClose, onCreado }: { onClose: () => void; onCreado
                 <Field label="Descripción">
                     <Input placeholder="Opcional" {...register('descripcion')} />
                 </Field>
+                <CamposPersonalizadosForm campos={campos} valores={pers} onChange={setPers} columnas={1} />
                 <div className="flex justify-end gap-3 border-t border-slate-200 pt-4">
                     <Button type="button" variant="secondary" onClick={onClose}>
                         Cancelar

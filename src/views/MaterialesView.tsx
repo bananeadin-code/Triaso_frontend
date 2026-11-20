@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { Controller, useForm } from 'react-hook-form'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'react-toastify'
 import {
@@ -14,15 +14,26 @@ import { descargarReporte } from '../api/ReportesAPI'
 import { useAuth } from '../hooks/useAuth'
 import { Button, CategoriaBadge, EmptyState, Field, Input, PageHeader, Select, Spinner } from '../components/ui'
 import { Modal } from '../components/Modal'
+import { SelectBuscable } from '../components/SelectBuscable'
+import { Paginacion, usePaginacionLocal } from '../components/Paginacion'
+import { BadgePorValidar, BotonValidar, FiltroPorValidar, usePorValidar } from '../components/PorValidar'
+import { CamposPersonalizadosForm, TdCampos, ThCampos, useCamposModulo } from '../components/CamposPersonalizados'
+import { opcionesProveedor } from '../lib/opciones'
 import { IconDownload, IconEdit, IconPlus, IconSearch, IconTrash } from '../components/icons'
-import type { Categoria, Material, MaterialFormData, Proveedor } from '../types'
+import type { CampoDef, Categoria, Material, MaterialFormData, Proveedor } from '../types'
 
 const money = (n: number) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n)
 const usd = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n)
+// Muestra "—" cuando el material no se compra en esa moneda (costo 0 = vacío)
+const moneyOr = (n: number) => (n > 0 ? money(n) : '—')
+const usdOr = (n: number) => (n > 0 ? usd(n) : '—')
 
 export function MaterialesView() {
     const { usuario, puede } = useAuth()
-    const puedeEditar = puede('materiales', 'escritura')
+    const puedeCrear = puede('materiales', 'crear')
+    const puedeEditar = puede('materiales', 'editar')
+    const puedeEliminar = puede('materiales', 'eliminar')
+    const conAcciones = puedeEditar || puedeEliminar
     const puedeReporte = !!usuario?.permisos.generarReportes
     const queryClient = useQueryClient()
 
@@ -34,6 +45,7 @@ export function MaterialesView() {
     const materiales = useQuery({ queryKey: ['materiales'], queryFn: getMateriales })
     const proveedores = useQuery({ queryKey: ['proveedores'], queryFn: getProveedores })
     const categorias = useQuery({ queryKey: ['categorias'], queryFn: getCategorias })
+    const { campos: camposActivos, cargando: cargandoCampos } = useCamposModulo('materiales')
 
     const eliminar = useMutation({
         mutationFn: eliminarMaterial,
@@ -44,15 +56,18 @@ export function MaterialesView() {
         onError: (e: Error) => toast.error(e.message),
     })
 
-    if (materiales.isLoading || proveedores.isLoading || categorias.isLoading)
-        return <Spinner label="Cargando materiales…" />
-
-    const lista = (materiales.data ?? []).filter((m) => {
+    const pv = usePorValidar('materiales', materiales.data ?? [])
+    const lista = pv.filtrar(materiales.data ?? []).filter((m) => {
         const q = busqueda.toLowerCase()
         const coincide = m.clave.toLowerCase().includes(q) || m.concepto.toLowerCase().includes(q)
         const cat = filtroCat === '' || m.categoriaPrincipal === filtroCat
         return coincide && cat
     })
+    // Se pintan 25 renglones por página (el catálogo completo sí se carga: lo usan los buscadores)
+    const { visibles, control } = usePaginacionLocal(lista)
+
+    if (materiales.isLoading || proveedores.isLoading || categorias.isLoading || cargandoCampos)
+        return <Spinner label="Cargando materiales…" />
 
     return (
         <div>
@@ -73,7 +88,7 @@ export function MaterialesView() {
                                 <IconDownload /> Reporte PDF
                             </Button>
                         )}
-                        {puedeEditar && (
+                        {puedeCrear && (
                             <Button
                                 onClick={() => {
                                     setEditando(null)
@@ -106,6 +121,15 @@ export function MaterialesView() {
                         </option>
                     ))}
                 </Select>
+                <FiltroPorValidar
+                    pendientes={pv.pendientes}
+                    solo={pv.solo}
+                    onSolo={pv.setSolo}
+                    mostrados={lista.length}
+                    onValidarTodos={() => pv.validar.mutate(lista.filter((m) => m.porValidar).map((m) => m._id))}
+                    puedeValidar={puedeEditar}
+                    validando={pv.validar.isPending}
+                />
             </div>
 
             <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -122,16 +146,20 @@ export function MaterialesView() {
                                     <th className="px-4 py-3">Proveedor</th>
                                     <th className="px-4 py-3 text-right">Costo MXN</th>
                                     <th className="px-4 py-3 text-right">Costo USD</th>
-                                    {puedeEditar && <th className="px-4 py-3 text-right">Acciones</th>}
+                                    <ThCampos campos={camposActivos} />
+                                    {conAcciones && <th className="px-4 py-3 text-right">Acciones</th>}
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
-                                {lista.map((m) => (
+                                {visibles.map((m) => (
                                     <tr key={m._id} className="transition-colors hover:bg-slate-50">
                                         <td className="px-4 py-3">
                                             <span className="font-mono font-semibold text-brand-700">{m.clave}</span>
                                         </td>
-                                        <td className="px-4 py-3 text-slate-700">{m.concepto}</td>
+                                        <td className="px-4 py-3 text-slate-700">
+                                            {m.concepto}
+                                            {m.porValidar && <BadgePorValidar />}
+                                        </td>
                                         <td className="px-4 py-3">
                                             <div className="flex items-center justify-center">
                                                 <CategoriaBadge id={m.categoriaPrincipal} />
@@ -141,32 +169,40 @@ export function MaterialesView() {
                                             {m.proveedorPrincipal?.codigo ?? '—'}
                                         </td>
                                         <td className="px-4 py-3 text-right font-medium text-slate-700">
-                                            {money(m.costoUnitario)}
+                                            {moneyOr(m.costoUnitario)}
                                         </td>
-                                        <td className="px-4 py-3 text-right text-slate-600">{usd(m.costoUSD)}</td>
-                                        {puedeEditar && (
+                                        <td className="px-4 py-3 text-right text-slate-600">{usdOr(m.costoUSD)}</td>
+                                        <TdCampos campos={camposActivos} valores={m.personalizados} />
+                                        {conAcciones && (
                                             <td className="px-4 py-3">
                                                 <div className="flex justify-end gap-1">
-                                                    <button
-                                                        onClick={() => {
-                                                            setEditando(m)
-                                                            setModalAbierto(true)
-                                                        }}
-                                                        className="rounded-md p-2 text-slate-500 hover:bg-brand-50 hover:text-brand-700"
-                                                        title="Editar"
-                                                    >
-                                                        <IconEdit />
-                                                    </button>
-                                                    <button
-                                                        onClick={() => {
-                                                            if (confirm(`¿Eliminar el material ${m.clave}?`))
-                                                                eliminar.mutate(m._id)
-                                                        }}
-                                                        className="rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600"
-                                                        title="Eliminar"
-                                                    >
-                                                        <IconTrash />
-                                                    </button>
+                                                    {puedeEditar && m.porValidar && (
+                                                        <BotonValidar onClick={() => pv.validar.mutate([m._id])} disabled={pv.validar.isPending} />
+                                                    )}
+                                                    {puedeEditar && (
+                                                        <button
+                                                            onClick={() => {
+                                                                setEditando(m)
+                                                                setModalAbierto(true)
+                                                            }}
+                                                            className="rounded-md p-2 text-slate-500 hover:bg-brand-50 hover:text-brand-700"
+                                                            title="Editar"
+                                                        >
+                                                            <IconEdit />
+                                                        </button>
+                                                    )}
+                                                    {puedeEliminar && (
+                                                        <button
+                                                            onClick={() => {
+                                                                if (confirm(`¿Eliminar el material ${m.clave}?`))
+                                                                    eliminar.mutate(m._id)
+                                                            }}
+                                                            className="rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600"
+                                                            title="Eliminar"
+                                                        >
+                                                            <IconTrash />
+                                                        </button>
+                                                    )}
                                                 </div>
                                             </td>
                                         )}
@@ -176,6 +212,7 @@ export function MaterialesView() {
                         </table>
                     </div>
                 )}
+                <Paginacion {...control} />
             </div>
 
             {modalAbierto && (
@@ -183,6 +220,7 @@ export function MaterialesView() {
                     material={editando}
                     proveedores={proveedores.data ?? []}
                     categorias={categorias.data ?? []}
+                    campos={camposActivos}
                     onClose={() => setModalAbierto(false)}
                     onSaved={() => {
                         setModalAbierto(false)
@@ -199,19 +237,24 @@ function MaterialFormModal({
     material,
     proveedores,
     categorias,
+    campos,
     onClose,
     onSaved,
 }: {
     material: Material | null
     proveedores: Proveedor[]
     categorias: Categoria[]
+    campos: CampoDef[]
     onClose: () => void
     onSaved: () => void
 }) {
     const esEdicion = Boolean(material)
+    const [pers, setPers] = useState<Record<string, unknown>>(material?.personalizados ?? {})
     const {
         register,
+        control,
         handleSubmit,
+        watch,
         formState: { errors, isSubmitting },
     } = useForm<MaterialFormData>({
         defaultValues: {
@@ -219,18 +262,33 @@ function MaterialFormModal({
             categoriaPrincipal: material?.categoriaPrincipal ?? 'A',
             proveedorPrincipal: material?.proveedorPrincipal?._id ?? '',
             proveedoresAsociados: material?.proveedoresAsociados?.map((p) => p._id) ?? [],
+            moneda: material?.moneda ?? 'mxn',
+            monedaPrincipal: material?.monedaPrincipal ?? 'mxn',
             costoUnitario: material?.costoUnitario ?? 0,
             costoUSD: material?.costoUSD ?? 0,
         },
     })
+    const moneda = watch('moneda')
+    const principalSel = watch('monedaPrincipal')
+    const asociados = ([] as string[]).concat(watch('proveedoresAsociados') ?? [])
+    const [filtroAsoc, setFiltroAsoc] = useState('')
+    const coincideAsoc = (p: Proveedor) => {
+        const q = filtroAsoc.trim().toLowerCase()
+        return !q || `${p.codigo} ${p.razonSocial}`.toLowerCase().includes(q)
+    }
+    const usaMXN = moneda !== 'usd'
+    const usaUSD = moneda !== 'mxn'
 
     const onSubmit = async (datos: MaterialFormData) => {
-        // Normaliza el array que RHF entrega como string cuando hay un solo checkbox
+        // La moneda que no aplica se manda en 0 (vacía). La principal solo importa con 'ambos';
+        // con una sola moneda el backend la fija sola.
         const payload: MaterialFormData = {
             ...datos,
-            costoUnitario: Number(datos.costoUnitario),
-            costoUSD: Number(datos.costoUSD),
+            monedaPrincipal: moneda === 'ambos' ? datos.monedaPrincipal : moneda === 'usd' ? 'usd' : 'mxn',
+            costoUnitario: usaMXN ? Number(datos.costoUnitario) || 0 : 0,
+            costoUSD: usaUSD ? Number(datos.costoUSD) || 0 : 0,
             proveedoresAsociados: ([] as string[]).concat(datos.proveedoresAsociados ?? []),
+            personalizados: pers,
         }
         try {
             if (esEdicion && material) {
@@ -262,69 +320,174 @@ function MaterialFormModal({
                     />
                 </Field>
 
-                <div className="grid grid-cols-2 gap-4">
-                    <Field label="Categoría principal" error={errors.categoriaPrincipal?.message} required>
-                        <Select {...register('categoriaPrincipal', { required: true })}>
-                            {categorias.map((c) => (
-                                <option key={c.id} value={c.id}>
-                                    {c.id} · {c.nombre} ({c.prefijo})
-                                </option>
-                            ))}
-                        </Select>
-                    </Field>
-                    <Field label="Costo unitario MXN" error={errors.costoUnitario?.message} required>
-                        <Input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            {...register('costoUnitario', {
-                                required: 'El costo unitario es obligatorio',
-                                min: { value: 0, message: 'Debe ser positivo' },
-                                valueAsNumber: true,
-                            })}
-                        />
-                    </Field>
-                </div>
-
-                <Field label="Costo unitario USD" error={errors.costoUSD?.message}>
-                    <Input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        {...register('costoUSD', { min: { value: 0, message: 'Debe ser positivo' }, valueAsNumber: true })}
-                    />
-                </Field>
-                <p className="-mt-2 text-xs text-slate-400">
-                    Al guardar, el costo se sincroniza automáticamente en todos los componentes que usan este material.
-                </p>
-
-                <Field label="Proveedor principal" error={errors.proveedorPrincipal?.message} required>
-                    <Select {...register('proveedorPrincipal', { required: 'Selecciona un proveedor' })}>
-                        <option value="">— Selecciona —</option>
-                        {proveedores.map((p) => (
-                            <option key={p._id} value={p._id}>
-                                {p.codigo} · {p.razonSocial}
+                <Field label="Categoría principal" error={errors.categoriaPrincipal?.message} required>
+                    <Select {...register('categoriaPrincipal', { required: true })}>
+                        {categorias.map((c) => (
+                            <option key={c.id} value={c.id}>
+                                {c.id} · {c.nombre} ({c.prefijo})
                             </option>
                         ))}
                     </Select>
                 </Field>
 
-                <Field label="Proveedores asociados (alternativas ante faltantes)">
-                    <div className="flex flex-wrap gap-3 rounded-lg border border-slate-200 p-3">
-                        {proveedores.length === 0 && <span className="text-sm text-slate-400">Sin proveedores</span>}
-                        {proveedores.map((p) => (
-                            <label key={p._id} className="inline-flex items-center gap-2 text-sm text-slate-700">
-                                <input
-                                    type="checkbox"
-                                    value={p._id}
-                                    {...register('proveedoresAsociados')}
-                                    className="rounded"
-                                />
-                                {p.codigo}
+                {/* Moneda de compra: pesos, dólares o ambos (lo declara Triaso) */}
+                <Field label="¿En qué moneda se compra?">
+                    <div className="flex flex-wrap gap-2">
+                        {(
+                            [
+                                { v: 'mxn', t: 'Solo pesos (MXN)' },
+                                { v: 'usd', t: 'Solo dólares (USD)' },
+                                { v: 'ambos', t: 'Ambos' },
+                            ] as const
+                        ).map((op) => (
+                            <label
+                                key={op.v}
+                                className={`cursor-pointer rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                                    moneda === op.v
+                                        ? 'border-brand-600 bg-brand-50 text-brand-700'
+                                        : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'
+                                }`}
+                            >
+                                <input type="radio" value={op.v} {...register('moneda')} className="sr-only" />
+                                {op.t}
                             </label>
                         ))}
                     </div>
                 </Field>
+
+                <div className="grid grid-cols-2 gap-4">
+                    {usaMXN && (
+                        <Field label="Costo unitario MXN" error={errors.costoUnitario?.message} required>
+                            <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                {...register('costoUnitario', {
+                                    required: usaMXN ? 'Captura el costo en pesos' : false,
+                                    min: { value: 0, message: 'Debe ser positivo' },
+                                    valueAsNumber: true,
+                                })}
+                            />
+                        </Field>
+                    )}
+                    {usaUSD && (
+                        <Field label="Costo unitario USD" error={errors.costoUSD?.message} required>
+                            <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                {...register('costoUSD', {
+                                    required: usaUSD ? 'Captura el costo en dólares' : false,
+                                    min: { value: 0, message: 'Debe ser positivo' },
+                                    valueAsNumber: true,
+                                })}
+                            />
+                        </Field>
+                    )}
+                </div>
+
+                {moneda === 'ambos' && (
+                    <Field label="¿Cuál precio es el PRINCIPAL (el que se usa para costear el BOM)?">
+                        <div className="flex flex-wrap gap-2">
+                            {(
+                                [
+                                    { v: 'mxn', t: 'Pesos (MXN)' },
+                                    { v: 'usd', t: 'Dólares (USD)' },
+                                ] as const
+                            ).map((op) => (
+                                <label
+                                    key={op.v}
+                                    className={`cursor-pointer rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                                        principalSel === op.v
+                                            ? 'border-brand-600 bg-brand-50 text-brand-700'
+                                            : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'
+                                    }`}
+                                >
+                                    <input type="radio" value={op.v} {...register('monedaPrincipal')} className="sr-only" />
+                                    {op.t}
+                                </label>
+                            ))}
+                        </div>
+                        <p className="mt-1 text-xs text-slate-400">
+                            El otro precio queda como dato secundario (por si lo mandan a pedir en esa moneda). El costeo del
+                            BOM y la cotización usa solo el principal, para no duplicar.
+                        </p>
+                    </Field>
+                )}
+
+                <p className="-mt-2 text-xs text-slate-400">
+                    Deja fuera la moneda que no manejan para este material. Al guardar, el costo se sincroniza en todos los
+                    componentes que lo usan.
+                </p>
+
+                <Field label="Proveedor principal" error={errors.proveedorPrincipal?.message} required>
+                    <Controller
+                        control={control}
+                        name="proveedorPrincipal"
+                        rules={{ required: 'Selecciona un proveedor' }}
+                        render={({ field }) => (
+                            <SelectBuscable
+                                value={field.value}
+                                onChange={field.onChange}
+                                onBlur={field.onBlur}
+                                opciones={opcionesProveedor(proveedores)}
+                                placeholder="Buscar por código, razón social o RFC…"
+                                invalido={!!errors.proveedorPrincipal}
+                            />
+                        )}
+                    />
+                </Field>
+
+                {/* Asociados: casillas con filtro. Las que no coinciden se OCULTAN (no se desmontan)
+                    para que el formulario conserve lo ya marcado. */}
+                <div>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="text-sm font-medium text-slate-700">
+                            Proveedores asociados (alternativas ante faltantes)
+                        </span>
+                        {asociados.length > 0 && (
+                            <span className="text-xs font-medium text-brand-700">{asociados.length} seleccionado(s)</span>
+                        )}
+                    </div>
+                    <div className="rounded-lg border border-slate-200">
+                        {proveedores.length > 8 && (
+                            <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2">
+                                <IconSearch width={16} height={16} className="text-slate-400" />
+                                <input
+                                    value={filtroAsoc}
+                                    onChange={(e) => setFiltroAsoc(e.target.value)}
+                                    placeholder="Filtrar proveedores…"
+                                    aria-label="Filtrar proveedores asociados"
+                                    className="w-full text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none"
+                                />
+                            </div>
+                        )}
+                        <div className="flex max-h-40 flex-wrap gap-3 overflow-y-auto p-3">
+                            {proveedores.length === 0 && <span className="text-sm text-slate-400">Sin proveedores</span>}
+                            {proveedores.map((p) => (
+                                <label
+                                    key={p._id}
+                                    title={p.razonSocial}
+                                    className={`${coincideAsoc(p) ? 'inline-flex' : 'hidden'} items-center gap-2 text-sm text-slate-700`}
+                                >
+                                    <input
+                                        type="checkbox"
+                                        value={p._id}
+                                        {...register('proveedoresAsociados')}
+                                        className="rounded"
+                                    />
+                                    {p.codigo}
+                                </label>
+                            ))}
+                            {filtroAsoc && !proveedores.some(coincideAsoc) && (
+                                <span className="text-sm text-slate-400">Sin coincidencias</span>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Campos personalizados (informativos, definidos en Configuración) */}
+                <CamposPersonalizadosForm campos={campos} valores={pers} onChange={setPers} />
 
                 <div className="flex justify-end gap-3 border-t border-slate-200 pt-4">
                     <Button type="button" variant="secondary" onClick={onClose}>

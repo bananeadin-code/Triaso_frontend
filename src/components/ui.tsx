@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
 import type { CategoriaId } from '../types'
 import { IconSearch } from './icons'
@@ -48,6 +49,64 @@ export function Button({ variant = 'primary', className = '', ...props }: Button
     )
 }
 
+// ---------- Barra de guardado fija (abajo) ----------
+// Para editores largos (componentes, composición del BOM): el botón de guardar queda siempre
+// a la vista aunque se haga scroll. Muestra si hay cambios pendientes y acepta Ctrl/Cmd+S.
+export function BarraGuardado({
+    hayCambios,
+    guardando,
+    onGuardar,
+    onDescartar,
+    etiqueta = 'Guardar cambios',
+}: {
+    hayCambios: boolean
+    guardando: boolean
+    onGuardar: () => void
+    onDescartar?: () => void
+    etiqueta?: string
+}) {
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                e.preventDefault()
+                if (hayCambios && !guardando) onGuardar()
+            }
+        }
+        window.addEventListener('keydown', onKey)
+        return () => window.removeEventListener('keydown', onKey)
+    }, [hayCambios, guardando, onGuardar])
+
+    return (
+        <div
+            role="region"
+            aria-label="Guardar cambios"
+            className={`sticky bottom-0 z-20 mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-5 py-3 shadow-lg backdrop-blur transition-colors ${
+                hayCambios ? 'border-amber-200 bg-amber-50/95' : 'border-slate-200 bg-white/95'
+            }`}
+        >
+            <div className="flex items-center gap-2 text-sm" aria-live="polite">
+                <span className={`h-2 w-2 rounded-full ${hayCambios ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+                {hayCambios ? (
+                    <span className="font-medium text-amber-700">Cambios sin guardar</span>
+                ) : (
+                    <span className="text-slate-500">Todo guardado</span>
+                )}
+                <span className="hidden text-xs text-slate-400 sm:inline">· Ctrl+S para guardar</span>
+            </div>
+            <div className="flex items-center gap-2">
+                {onDescartar && hayCambios && (
+                    <Button variant="ghost" onClick={onDescartar} disabled={guardando}>
+                        Descartar
+                    </Button>
+                )}
+                <Button onClick={onGuardar} disabled={guardando || !hayCambios}>
+                    {guardando ? 'Guardando…' : etiqueta}
+                </Button>
+            </div>
+        </div>
+    )
+}
+
 // ---------- Campo (label + control + error) ----------
 export function Field({
     label,
@@ -92,20 +151,36 @@ export function Badge({ children }: { children: ReactNode }) {
     )
 }
 
-// ---------- Badge de categoría (color por letra A-E) ----------
-const CAT_COLOR: Record<CategoriaId, string> = {
+// ---------- Badge de categoría (color por id; A-E fijos, resto por paleta) ----------
+const CAT_COLOR: Record<string, string> = {
     A: 'bg-orange-100 text-orange-800 ring-orange-200',
     B: 'bg-teal-100 text-teal-800 ring-teal-200',
     C: 'bg-violet-100 text-violet-800 ring-violet-200',
     D: 'bg-blue-100 text-blue-800 ring-blue-200',
     E: 'bg-pink-100 text-pink-800 ring-pink-200',
 }
+const CAT_PALETA = [
+    'bg-amber-100 text-amber-800 ring-amber-200',
+    'bg-emerald-100 text-emerald-800 ring-emerald-200',
+    'bg-cyan-100 text-cyan-800 ring-cyan-200',
+    'bg-fuchsia-100 text-fuchsia-800 ring-fuchsia-200',
+    'bg-lime-100 text-lime-800 ring-lime-200',
+    'bg-rose-100 text-rose-800 ring-rose-200',
+    'bg-indigo-100 text-indigo-800 ring-indigo-200',
+    'bg-sky-100 text-sky-800 ring-sky-200',
+]
+function colorCategoria(id: string): string {
+    if (CAT_COLOR[id]) return CAT_COLOR[id]
+    let h = 0
+    for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0
+    return CAT_PALETA[h % CAT_PALETA.length]
+}
 
 export function CategoriaBadge({ id, title }: { id: CategoriaId; title?: string }) {
     return (
         <span
             title={title}
-            className={`inline-flex h-6 w-6 items-center justify-center rounded-md text-xs font-bold ring-1 ${CAT_COLOR[id]}`}
+            className={`inline-flex h-6 min-w-6 items-center justify-center rounded-md px-1 text-xs font-bold ring-1 ${colorCategoria(id)}`}
         >
             {id}
         </span>

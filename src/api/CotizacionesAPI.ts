@@ -1,6 +1,6 @@
 import { isAxiosError } from 'axios'
 import api from '../lib/axios'
-import type { CotizacionDetalle, CotizacionListItem, LineaInput } from '../types'
+import type { CotizacionDetalle, CotizacionListItem, LineaInput, Paginado } from '../types'
 
 function manejarError(error: unknown, fallback: string): never {
     if (isAxiosError(error) && error.response) {
@@ -9,8 +9,27 @@ function manejarError(error: unknown, fallback: string): never {
     throw new Error(fallback)
 }
 
+// Lista completa (panel de inicio)
 export async function getCotizaciones() {
     const { data } = await api.get<CotizacionListItem[]>('/cotizaciones')
+    return data
+}
+
+export interface FiltrosCotizacion {
+    q?: string
+    estado?: string
+    contexto?: string
+    paridad?: string // id del registro de Paridad
+    tcMin?: string
+    tcMax?: string
+    desde?: string // AAAA-MM-DD
+    hasta?: string
+}
+
+// Página de cotizaciones con filtros (el servidor filtra y pagina)
+export async function getCotizacionesPagina(pagina: number, limite: number, filtros: FiltrosCotizacion) {
+    const params = Object.fromEntries(Object.entries({ ...filtros, pagina, limite }).filter(([, v]) => v !== undefined && v !== ''))
+    const { data } = await api.get<Paginado<CotizacionListItem>>('/cotizaciones', { params })
     return data
 }
 
@@ -40,24 +59,6 @@ export async function registrarOrdenesCot(id: string, proveedor?: string, presup
     }
 }
 
-export async function limpiarCotizacionesTerminadas() {
-    try {
-        const { data } = await api.delete<{ mensaje: string; eliminadas: number }>('/cotizaciones/limpiar/terminadas')
-        return data
-    } catch (error) {
-        manejarError(error, 'Error al limpiar las cotizaciones')
-    }
-}
-
-export async function limpiarCotizacionesCanceladas() {
-    try {
-        const { data } = await api.delete<{ mensaje: string; eliminadas: number }>('/cotizaciones/limpiar/canceladas')
-        return data
-    } catch (error) {
-        manejarError(error, 'Error al limpiar las cotizaciones canceladas')
-    }
-}
-
 export async function declararSalida(id: string) {
     try {
         const { data } = await api.post<{ mensaje: string; materialesDescontados: number }>(
@@ -71,7 +72,7 @@ export async function declararSalida(id: string) {
 
 export async function actualizarCotizacion(
     id: string,
-    datos: { costoCotizacion?: number; usarCalculado?: boolean }
+    datos: { costoCotizacion?: number; usarCalculado?: boolean; tipoCambio?: number }
 ) {
     try {
         const { data } = await api.put(`/cotizaciones/${id}`, datos)
@@ -81,9 +82,13 @@ export async function actualizarCotizacion(
     }
 }
 
-export async function actualizarCostoMaterialCot(id: string, material: string, costoMXN: number) {
+export async function actualizarCostoMaterialCot(
+    id: string,
+    material: string,
+    costos: { costoMXN?: number; costoUSD?: number }
+) {
     try {
-        const { data } = await api.put(`/cotizaciones/${id}/costo-material`, { material, costoMXN })
+        const { data } = await api.put(`/cotizaciones/${id}/costo-material`, { material, ...costos })
         return data
     } catch (error) {
         manejarError(error, 'Error al actualizar el costo del material')

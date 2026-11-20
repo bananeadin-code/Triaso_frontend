@@ -19,7 +19,7 @@ export async function getEquipo(id: string) {
     return data
 }
 
-export async function crearEquipo(datos: { nombre: string; tipo?: string; descripcion?: string }) {
+export async function crearEquipo(datos: { nombre: string; tipo?: string; descripcion?: string; personalizados?: Record<string, unknown> }) {
     try {
         const { data } = await api.post('/equipos', datos)
         return data
@@ -30,7 +30,7 @@ export async function crearEquipo(datos: { nombre: string; tipo?: string; descri
 
 export async function actualizarEquipo(
     id: string,
-    datos: { nombre?: string; tipo?: string; descripcion?: string; lineas?: LineaInput[] }
+    datos: { nombre?: string; tipo?: string; descripcion?: string; lineas?: LineaInput[]; personalizados?: Record<string, unknown> }
 ) {
     try {
         const { data } = await api.put(`/equipos/${id}`, datos)

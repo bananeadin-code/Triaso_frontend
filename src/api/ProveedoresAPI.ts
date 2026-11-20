@@ -45,3 +45,19 @@ export async function eliminarProveedor(id: string) {
         manejarError(error, 'Error al eliminar el proveedor')
     }
 }
+
+export interface ResultadoImport {
+    mensaje: string
+    creados: number
+    actualizados: number
+    omitidos: { fila: number; codigo: string; motivo: string }[]
+}
+
+export async function importarProveedores(proveedores: ProveedorFormData[]) {
+    try {
+        const { data } = await api.post<ResultadoImport>('/proveedores/importar', { proveedores })
+        return data
+    } catch (error) {
+        manejarError(error, 'Error al importar proveedores')
+    }
+}

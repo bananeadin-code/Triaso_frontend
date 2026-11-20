@@ -15,10 +15,13 @@ import { ComponentesView } from './views/ComponentesView'
 import { ComponenteEditorView } from './views/ComponenteEditorView'
 import { EquiposView } from './views/EquiposView'
 import { EquipoBOMView } from './views/EquipoBOMView'
+import { ImportarBOMView } from './views/ImportarBOMView'
 import { CotizacionesView } from './views/CotizacionesView'
 import { CotizacionDetalleView } from './views/CotizacionDetalleView'
 import { UsuariosView } from './views/UsuariosView'
 import { PerfilView } from './views/PerfilView'
+import { ConfiguracionView } from './views/ConfiguracionView'
+import { ParidadView } from './views/ParidadView'
 import type { Modulo } from './types'
 
 // Guarda una ruta según el módulo: si el rol no tiene acceso, redirige al panel.
@@ -26,6 +29,14 @@ function Requiere({ modulo, children }: { modulo: Modulo; children: ReactNode })
     const { puede, isLoading } = useAuth()
     if (isLoading) return <Spinner label="Cargando…" />
     if (!puede(modulo)) return <Navigate to="/" replace />
+    return <>{children}</>
+}
+
+// Guarda de gestión: solo admin u operador (parámetros globales de la empresa).
+function RequiereGestion({ children }: { children: ReactNode }) {
+    const { usuario, isLoading } = useAuth()
+    if (isLoading) return <Spinner label="Cargando…" />
+    if (usuario?.rol !== 'admin' && usuario?.rol !== 'operador') return <Navigate to="/" replace />
     return <>{children}</>
 }
 
@@ -40,6 +51,7 @@ export default function Router() {
                         <Route path="/" element={<DashboardView />} />
                         <Route path="/perfil" element={<PerfilView />} />
                         <Route path="/equipos" element={<Requiere modulo="equipos"><EquiposView /></Requiere>} />
+                        <Route path="/equipos/importar" element={<Requiere modulo="equipos"><ImportarBOMView /></Requiere>} />
                         <Route path="/equipos/:id" element={<Requiere modulo="equipos"><EquipoBOMView /></Requiere>} />
                         <Route path="/cotizaciones" element={<Requiere modulo="cotizaciones"><CotizacionesView /></Requiere>} />
                         <Route path="/cotizaciones/:id" element={<Requiere modulo="cotizaciones"><CotizacionDetalleView /></Requiere>} />
@@ -51,6 +63,8 @@ export default function Router() {
                         <Route path="/proveedores" element={<Requiere modulo="proveedores"><ProveedoresView /></Requiere>} />
                         <Route path="/historial" element={<Requiere modulo="historial"><HistorialView /></Requiere>} />
                         <Route path="/usuarios" element={<Requiere modulo="usuarios"><UsuariosView /></Requiere>} />
+                        <Route path="/paridad" element={<RequiereGestion><ParidadView /></RequiereGestion>} />
+                        <Route path="/configuracion" element={<RequiereGestion><ConfiguracionView /></RequiereGestion>} />
                         <Route path="*" element={<Navigate to="/" replace />} />
                     </Route>
                 </Route>

@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'react-toastify'
-import { actualizarUsuario, crearUsuario, eliminarUsuario, getUsuarios } from '../api/UsuariosAPI'
+import { actualizarUsuario, crearUsuario, eliminarUsuario, getUsuarios, resetearPassword } from '../api/UsuariosAPI'
 import { useAuth } from '../hooks/useAuth'
 import { Button, EmptyState, Field, Input, PageHeader, Select, Spinner } from '../components/ui'
-import { IconPlus, IconTrash } from '../components/icons'
-import { ROL_LABEL } from '../types'
-import type { Permisos, Rol, RolInfo, UsuarioAdmin } from '../types'
+import { IconLock, IconPlus, IconTrash } from '../components/icons'
+import { MODULO_LABEL, ROL_LABEL } from '../types'
+import type { AccesoModulo, MatrizAccesos, Modulo, Permisos, Rol, RolInfo, UsuarioAdmin } from '../types'
 
 const ROL_STYLE: Record<Rol, string> = {
     admin: 'bg-navy-900 text-white',
@@ -24,6 +24,7 @@ export function UsuariosView() {
     const { usuario: yo } = useAuth()
     const { data, isLoading } = useQuery({ queryKey: ['usuarios'], queryFn: getUsuarios })
     const [editando, setEditando] = useState<UsuarioAdmin | null>(null)
+    const [reseteando, setReseteando] = useState<UsuarioAdmin | null>(null)
     const [creando, setCreando] = useState(false)
 
     const invalidar = () => queryClient.invalidateQueries({ queryKey: ['usuarios'] })
@@ -46,7 +47,7 @@ export function UsuariosView() {
                 titulo="Usuarios"
                 descripcion="Registra usuarios, asígnales un rol y sus permisos"
                 accion={
-                    <Button onClick={() => setCreando(true)}>
+                    <Button onClick={() => setCreando(true)} disabled={roles.length === 0}>
                         <IconPlus /> Nuevo usuario
                     </Button>
                 }
@@ -77,6 +78,14 @@ export function UsuariosView() {
                                             <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${ROL_STYLE[u.rol]}`}>
                                                 {ROL_LABEL[u.rol]}
                                             </span>
+                                            {u.accesosPersonalizados && u.rol !== 'admin' && (
+                                                <span
+                                                    className="mt-1 block text-[11px] font-medium text-amber-600"
+                                                    title="Sus módulos/operaciones difieren del paquete del rol"
+                                                >
+                                                    Personalizado
+                                                </span>
+                                            )}
                                         </td>
                                         <td className="px-4 py-3">
                                             <PermisoChips rol={u.rol} permisos={u.permisos} />
@@ -97,12 +106,19 @@ export function UsuariosView() {
                                                     </span>
                                                 </div>
                                             ) : (
-                                                <div className="flex justify-end gap-1">
+                                                <div className="flex items-center justify-end gap-1">
                                                     <button
                                                         onClick={() => setEditando(u)}
                                                         className="rounded-md px-2 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
                                                     >
                                                         Rol y permisos
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setReseteando(u)}
+                                                        className="rounded-md p-2 text-slate-500 hover:bg-brand-50 hover:text-brand-700"
+                                                        title="Restablecer contraseña"
+                                                    >
+                                                        <IconLock />
                                                     </button>
                                                     <button
                                                         onClick={() => {
@@ -126,6 +142,7 @@ export function UsuariosView() {
 
             {creando && <UsuarioModal roles={roles} onClose={() => setCreando(false)} onDone={invalidar} />}
             {editando && <EditarModal usuario={editando} roles={roles} onClose={() => setEditando(null)} onDone={invalidar} />}
+            {reseteando && <ResetPasswordModal usuario={reseteando} onClose={() => setReseteando(null)} />}
         </div>
     )
 }
@@ -133,7 +150,6 @@ export function UsuariosView() {
 function PermisoChips({ rol, permisos }: { rol: Rol; permisos: Permisos }) {
     if (permisosPlenos(rol)) return <span className="text-xs text-slate-400">Todos</span>
     const chips: string[] = []
-    if (permisos.limpiarHistoriales) chips.push('Limpiar')
     if (permisos.generarReportes) chips.push('Reportes')
     if (chips.length === 0) return <span className="text-xs text-slate-400">—</span>
     return (
@@ -153,10 +169,20 @@ function UsuarioModal({ roles, onClose, onDone }: { roles: RolInfo[]; onClose: (
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
     const [rol, setRol] = useState<Rol>('capturista')
-    const [permisos, setPermisos] = useState<Permisos>({ limpiarHistoriales: false, generarReportes: false })
+    const [permisos, setPermisos] = useState<Permisos>({ generarReportes: false })
+    const [personalizado, setPersonalizado] = useState(false)
+    const [matriz, setMatriz] = useState<MatrizAccesos>(() => copiarMatriz(roles.find((r) => r.clave === 'capturista')!.matriz))
 
     const crear = useMutation({
-        mutationFn: () => crearUsuario({ nombre, email, password, rol, permisos }),
+        mutationFn: () =>
+            crearUsuario({
+                nombre,
+                email,
+                password,
+                rol,
+                permisos,
+                ...(rol !== 'admin' && personalizado ? { accesosPersonalizados: true, accesos: matriz } : {}),
+            }),
         onSuccess: () => {
             toast.success('Usuario creado')
             onDone()
@@ -169,19 +195,29 @@ function UsuarioModal({ roles, onClose, onDone }: { roles: RolInfo[]; onClose: (
     const valido = nombre.trim() && /\S+@\S+\.\S+/.test(email) && password.length >= 6
 
     return (
-        <ModalShell titulo="Nuevo usuario" onClose={onClose}>
+        <ModalShell titulo="Nuevo usuario" onClose={onClose} ancho>
             <div className="space-y-4">
-                <Field label="Nombre" required>
-                    <Input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Nombre completo" />
-                </Field>
-                <Field label="Correo" required>
-                    <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="usuario@triaso.com" />
-                </Field>
+                <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="Nombre" required>
+                        <Input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Nombre completo" />
+                    </Field>
+                    <Field label="Correo" required>
+                        <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="usuario@triaso.com" />
+                    </Field>
+                </div>
                 <Field label="Contraseña" required error={password && password.length < 6 ? 'Mínimo 6 caracteres' : undefined}>
                     <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Contraseña inicial" />
                 </Field>
 
                 <RolSelect roles={roles} rol={rol} onChange={setRol} info={info} />
+                <MatrizPermisos
+                    rol={rol}
+                    roles={roles}
+                    personalizado={personalizado}
+                    matriz={matriz}
+                    onPersonalizado={setPersonalizado}
+                    onMatriz={setMatriz}
+                />
                 <PermisosCheck rol={rol} permisos={permisos} onChange={setPermisos} />
             </div>
 
@@ -202,9 +238,17 @@ function EditarModal({ usuario, roles, onClose, onDone }: { usuario: UsuarioAdmi
     const [rol, setRol] = useState<Rol>(usuario.rol)
     const [permisos, setPermisos] = useState<Permisos>(usuario.permisos)
     const [activo, setActivo] = useState<boolean>(usuario.activo)
+    const [personalizado, setPersonalizado] = useState<boolean>(!!usuario.accesosPersonalizados)
+    const [matriz, setMatriz] = useState<MatrizAccesos>(() => copiarMatriz(usuario.operaciones))
 
     const guardar = useMutation({
-        mutationFn: () => actualizarUsuario(usuario._id, { rol, permisos, activo }),
+        mutationFn: () =>
+            actualizarUsuario(usuario._id, {
+                rol,
+                permisos,
+                activo,
+                ...(rol !== 'admin' ? { accesosPersonalizados: personalizado, accesos: personalizado ? matriz : undefined } : {}),
+            }),
         onSuccess: () => {
             toast.success('Usuario actualizado')
             onDone()
@@ -216,10 +260,18 @@ function EditarModal({ usuario, roles, onClose, onDone }: { usuario: UsuarioAdmi
     const info = roles.find((r) => r.clave === rol)
 
     return (
-        <ModalShell titulo={`Editar ${usuario.nombre}`} onClose={onClose}>
+        <ModalShell titulo={`Editar ${usuario.nombre}`} onClose={onClose} ancho>
             <div className="space-y-4">
                 <p className="text-sm text-slate-500">{usuario.email}</p>
                 <RolSelect roles={roles} rol={rol} onChange={setRol} info={info} />
+                <MatrizPermisos
+                    rol={rol}
+                    roles={roles}
+                    personalizado={personalizado}
+                    matriz={matriz}
+                    onPersonalizado={setPersonalizado}
+                    onMatriz={setMatriz}
+                />
                 <PermisosCheck rol={rol} permisos={permisos} onChange={setPermisos} />
                 <label className="flex items-center gap-2 text-sm text-slate-700">
                     <input type="checkbox" checked={activo} onChange={(e) => setActivo(e.target.checked)} className="h-4 w-4" />
@@ -232,6 +284,69 @@ function EditarModal({ usuario, roles, onClose, onDone }: { usuario: UsuarioAdmi
                 </Button>
                 <Button onClick={() => guardar.mutate()} disabled={guardar.isPending}>
                     {guardar.isPending ? 'Guardando…' : 'Guardar cambios'}
+                </Button>
+            </div>
+        </ModalShell>
+    )
+}
+
+// ---------- Restablecer contraseña (admin, en cualquier momento) ----------
+function ResetPasswordModal({ usuario, onClose }: { usuario: UsuarioAdmin; onClose: () => void }) {
+    const [password, setPassword] = useState('')
+    const [ver, setVer] = useState(false)
+
+    const guardar = useMutation({
+        mutationFn: () => resetearPassword(usuario._id, password),
+        onSuccess: (r) => {
+            toast.success(r?.mensaje ?? 'Contraseña restablecida')
+            onClose()
+        },
+        onError: (e: Error) => toast.error(e.message),
+    })
+
+    return (
+        <ModalShell titulo="Restablecer contraseña" onClose={onClose}>
+            <p className="mb-4 text-sm text-slate-600">
+                Fija una contraseña nueva para <span className="font-semibold text-navy-900">{usuario.nombre}</span> (
+                {usuario.email}). Comunícasela; podrá cambiarla después desde <span className="font-medium">Mi perfil</span>.
+            </p>
+
+            <Field label="Nueva contraseña" required error={password && password.length < 6 ? 'Mínimo 6 caracteres' : undefined}>
+                <div className="flex items-center gap-2">
+                    <Input
+                        type={ver ? 'text' : 'password'}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Contraseña temporal"
+                        className="flex-1"
+                    />
+                    {/* Mantener presionado para ver (la contraseña que el admin está fijando) */}
+                    <button
+                        type="button"
+                        onMouseDown={() => setVer(true)}
+                        onMouseUp={() => setVer(false)}
+                        onMouseLeave={() => setVer(false)}
+                        onTouchStart={() => setVer(true)}
+                        onTouchEnd={() => setVer(false)}
+                        className="select-none rounded-md border border-slate-300 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                        title="Mantén presionado para ver"
+                    >
+                        {ver ? 'Viendo' : 'Ver'}
+                    </button>
+                </div>
+            </Field>
+
+            <p className="mt-2 text-xs text-slate-400">
+                Nota de seguridad: no es posible mostrar la contraseña actual del usuario (se guarda cifrada). Solo puedes
+                fijar una nueva.
+            </p>
+
+            <div className="mt-6 flex justify-end gap-3">
+                <Button variant="secondary" onClick={onClose}>
+                    Cancelar
+                </Button>
+                <Button onClick={() => guardar.mutate()} disabled={password.length < 6 || guardar.isPending}>
+                    {guardar.isPending ? 'Guardando…' : 'Restablecer'}
                 </Button>
             </div>
         </ModalShell>
@@ -257,7 +372,7 @@ function PermisosCheck({ rol, permisos, onChange }: { rol: Rol; permisos: Permis
     if (permisosPlenos(rol)) {
         return (
             <div className="rounded-lg border border-brand-100 bg-brand-50 px-3 py-2 text-xs text-brand-700">
-                Este rol tiene <strong>todos los permisos</strong> (limpiar historiales y generar reportes) de forma automática.
+                Este rol puede <strong>generar reportes PDF</strong> de forma automática.
             </div>
         )
     }
@@ -265,15 +380,6 @@ function PermisosCheck({ rol, permisos, onChange }: { rol: Rol; permisos: Permis
         <div>
             <p className="mb-1 text-sm font-medium text-slate-700">Permisos (dentro de sus módulos)</p>
             <div className="space-y-2 rounded-lg border border-slate-200 p-3">
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                    <input
-                        type="checkbox"
-                        checked={permisos.limpiarHistoriales}
-                        onChange={(e) => onChange({ ...permisos, limpiarHistoriales: e.target.checked })}
-                        className="h-4 w-4"
-                    />
-                    Limpiar historiales
-                </label>
                 <label className="flex items-center gap-2 text-sm text-slate-700">
                     <input
                         type="checkbox"
@@ -288,10 +394,153 @@ function PermisosCheck({ rol, permisos, onChange }: { rol: Rol; permisos: Permis
     )
 }
 
-function ModalShell({ titulo, onClose, children }: { titulo: string; onClose: () => void; children: React.ReactNode }) {
+// ---------- Matriz de permisos CRUD por módulo ----------
+const OPS: { clave: keyof AccesoModulo; etiqueta: string }[] = [
+    { clave: 'menu', etiqueta: 'Menú' },
+    { clave: 'ver', etiqueta: 'Ver' },
+    { clave: 'crear', etiqueta: 'Crear' },
+    { clave: 'editar', etiqueta: 'Editar' },
+    { clave: 'eliminar', etiqueta: 'Eliminar' },
+]
+// Usuarios es exclusivo del administrador: no se otorga por personalización
+const MODULOS_EDITABLES: Modulo[] = ['equipos', 'componentes', 'materiales', 'proveedores', 'inventario', 'cotizaciones', 'ordenes', 'historial']
+// Operaciones que no existen en un módulo (el historial es una bitácora de solo consulta)
+const NO_APLICA: Partial<Record<Modulo, (keyof AccesoModulo)[]>> = { historial: ['crear', 'editar', 'eliminar'] }
+
+const copiarMatriz = (m: MatrizAccesos): MatrizAccesos => JSON.parse(JSON.stringify(m))
+
+// Aplica las dependencias al marcar/desmarcar: cualquier operación o el menú requieren "Ver";
+// quitar "Ver" quita todo lo demás del módulo.
+function alternar(matriz: MatrizAccesos, modulo: Modulo, op: keyof AccesoModulo, valor: boolean): MatrizAccesos {
+    const nueva = copiarMatriz(matriz)
+    const fila = nueva[modulo]
+    fila[op] = valor
+    if (op === 'ver' && !valor) {
+        fila.menu = fila.crear = fila.editar = fila.eliminar = false
+    } else if (op !== 'ver' && valor) {
+        fila.ver = true
+    }
+    for (const na of NO_APLICA[modulo] ?? []) fila[na] = false
+    return nueva
+}
+
+function MatrizPermisos({
+    rol,
+    roles,
+    personalizado,
+    matriz,
+    onPersonalizado,
+    onMatriz,
+}: {
+    rol: Rol
+    roles: RolInfo[]
+    personalizado: boolean
+    matriz: MatrizAccesos
+    onPersonalizado: (v: boolean) => void
+    onMatriz: (m: MatrizAccesos) => void
+}) {
+    const plantilla = roles.find((r) => r.clave === rol)?.matriz
+    if (rol === 'admin') {
+        return (
+            <div className="rounded-lg border border-brand-100 bg-brand-50 px-3 py-2 text-xs text-brand-700">
+                El <strong>Administrador</strong> siempre tiene acceso total a todos los módulos; sus permisos no se personalizan.
+            </div>
+        )
+    }
+    if (!plantilla) return null
+    const vista = personalizado ? matriz : plantilla
+    const difiere = (m: Modulo, op: keyof AccesoModulo) => personalizado && vista[m][op] !== plantilla[m][op]
+    const cambios = personalizado ? MODULOS_EDITABLES.reduce((n, m) => n + OPS.filter((o) => difiere(m, o.clave)).length, 0) : 0
+
+    return (
+        <div>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-medium text-slate-700">Módulos y operaciones</p>
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                        type="checkbox"
+                        checked={personalizado}
+                        onChange={(e) => {
+                            // Al activar se parte del paquete del rol actual
+                            if (e.target.checked) onMatriz(copiarMatriz(plantilla))
+                            onPersonalizado(e.target.checked)
+                        }}
+                        className="h-4 w-4"
+                    />
+                    Personalizar permisos de este usuario
+                </label>
+            </div>
+
+            <div className="overflow-x-auto rounded-lg border border-slate-200">
+                <table className="w-full text-sm">
+                    <thead>
+                        <tr className="border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            <th className="px-3 py-2 text-left">Módulo</th>
+                            {OPS.map((o) => (
+                                <th key={o.clave} className="px-2 py-2 text-center">
+                                    {o.etiqueta}
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                        {MODULOS_EDITABLES.map((m) => (
+                            <tr key={m} className={vista[m].ver ? '' : 'text-slate-400'}>
+                                <td className="px-3 py-2 font-medium">{MODULO_LABEL[m]}</td>
+                                {OPS.map((o) =>
+                                    NO_APLICA[m]?.includes(o.clave) ? (
+                                        <td key={o.clave} className="px-2 py-2 text-center text-slate-300">
+                                            —
+                                        </td>
+                                    ) : (
+                                        <td key={o.clave} className={`px-2 py-2 text-center ${difiere(m, o.clave) ? 'bg-amber-50' : ''}`}>
+                                            <input
+                                                type="checkbox"
+                                                aria-label={`${o.etiqueta} en ${MODULO_LABEL[m]}`}
+                                                checked={vista[m][o.clave]}
+                                                disabled={!personalizado}
+                                                onChange={(e) => onMatriz(alternar(matriz, m, o.clave, e.target.checked))}
+                                                className="h-4 w-4 disabled:opacity-60"
+                                            />
+                                        </td>
+                                    )
+                                )}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+
+            {personalizado ? (
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                    <span>
+                        {cambios === 0 ? 'Igual al paquete del rol.' : `${cambios} diferencia(s) respecto al paquete del rol (resaltadas).`}{' '}
+                        "Menú" muestra el módulo en la barra lateral; "Ver" permite consultarlo aunque no esté en el menú.
+                    </span>
+                    {cambios > 0 && (
+                        <button
+                            type="button"
+                            onClick={() => onMatriz(copiarMatriz(plantilla))}
+                            className="rounded-md px-2 py-1 font-medium text-brand-700 hover:bg-brand-50"
+                        >
+                            Restablecer al paquete del rol
+                        </button>
+                    )}
+                </div>
+            ) : (
+                <p className="mt-2 text-xs text-slate-500">Vista previa del paquete del rol. Activa "Personalizar" para ajustar módulo por módulo.</p>
+            )}
+        </div>
+    )
+}
+
+function ModalShell({ titulo, onClose, children, ancho = false }: { titulo: string; onClose: () => void; children: React.ReactNode; ancho?: boolean }) {
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/50 p-4" onClick={onClose}>
-            <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div
+                className={`max-h-[90vh] w-full ${ancho ? 'max-w-2xl' : 'max-w-md'} overflow-y-auto rounded-2xl bg-white p-6 shadow-xl`}
+                onClick={(e) => e.stopPropagation()}
+            >
                 <h2 className="mb-4 font-display text-lg font-bold text-navy-900">{titulo}</h2>
                 {children}
             </div>

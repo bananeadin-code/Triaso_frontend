@@ -3,17 +3,18 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 import { getMateriales } from '../api/MaterialesAPI'
 import { getEquipos } from '../api/EquiposAPI'
-import { getOrdenes } from '../api/OrdenesAPI'
+import { getOrdenes, getRecomendaciones } from '../api/OrdenesAPI'
 import { getCotizaciones } from '../api/CotizacionesAPI'
 import { getProveedores } from '../api/ProveedoresAPI'
 import { getInventario } from '../api/InventarioAPI'
 import { useAuth } from '../hooks/useAuth'
 import { EmptyState, PageHeader, Spinner } from '../components/ui'
-import { IconCotizacion, IconEquipo, IconInventario, IconMaterial, IconOrden, IconProveedor } from '../components/icons'
+import { IconAlerta, IconCheck, IconCotizacion, IconEquipo, IconInventario, IconMaterial, IconMoneda, IconOrden, IconProveedor } from '../components/icons'
 import type { EstadoCot, EstadoOrden } from '../types'
 
 const money = (n: number) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n)
 const fecha = (iso: string) => new Date(iso).toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })
+const dias = (iso: string) => Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)
 
 const EST_ORD: Record<EstadoOrden, { label: string; cls: string }> = {
     borrador: { label: 'Borrador', cls: 'bg-slate-100 text-slate-700' },
@@ -40,35 +41,116 @@ export function DashboardView() {
     return <PanelCompleto nombre={nombre} />
 }
 
-// ---------- Panel completo (Admin / Operador general): KPIs + listas ----------
+// ---------- Panel completo (Admin / Operador general): cockpit operativo ----------
 function PanelCompleto({ nombre }: { nombre: string }) {
     const navigate = useNavigate()
     const materiales = useQuery({ queryKey: ['materiales'], queryFn: getMateriales })
     const equipos = useQuery({ queryKey: ['equipos'], queryFn: getEquipos })
     const ordenes = useQuery({ queryKey: ['ordenes'], queryFn: getOrdenes })
     const cotizaciones = useQuery({ queryKey: ['cotizaciones'], queryFn: getCotizaciones })
+    const recomendaciones = useQuery({ queryKey: ['recomendaciones'], queryFn: getRecomendaciones })
 
     if (materiales.isLoading || equipos.isLoading || ordenes.isLoading || cotizaciones.isLoading)
         return <Spinner label="Cargando panel…" />
 
     const listaOrdenes = ordenes.data ?? []
     const listaCot = cotizaciones.data ?? []
+    const recs = recomendaciones.data ?? []
     const cotActivas = listaCot.filter((c) => c.estado === 'activa').length
-    const ordEnCurso = listaOrdenes.filter((o) => o.estado === 'borrador' || o.estado === 'enviada').length
+    const enCurso = listaOrdenes.filter((o) => o.estado === 'borrador' || o.estado === 'enviada')
+    const enviadasSinConfirmar = listaOrdenes.filter((o) => o.estado === 'enviada')
+    // Dinero comprometido en compras en curso (borrador + enviada), en MXN
+    const comprometido = enCurso.reduce((s, o) => s + (o.presupuestoEstimado || 0), 0)
 
     return (
         <div>
             <PageHeader titulo={`Bienvenido, ${nombre}`} descripcion="Panorama general de la empresa" />
+
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <Kpi titulo="Cotizaciones activas" valor={cotActivas} icono={<IconCotizacion />} enlace="/cotizaciones" />
-                <Kpi titulo="Órdenes en curso" valor={ordEnCurso} icono={<IconOrden />} enlace="/ordenes" />
+                <Kpi titulo="Órdenes en curso" valor={enCurso.length} icono={<IconOrden />} enlace="/ordenes" />
+                <Kpi titulo="Comprometido en compras" valor={money(comprometido)} icono={<IconMoneda />} enlace="/ordenes" />
                 <Kpi titulo="Equipos registrados" valor={(equipos.data ?? []).length} icono={<IconEquipo />} enlace="/equipos" />
-                <Kpi titulo="Materiales en catálogo" valor={(materiales.data ?? []).length} icono={<IconMaterial />} enlace="/materiales" />
             </div>
+
+            {/* Requiere atención: lo que el admin debe empujar */}
             <div className="mt-6 grid gap-6 lg:grid-cols-2">
-                <ListaCotizaciones cots={listaCot.slice(0, 3)} onVer={(id) => navigate(`/cotizaciones/${id}`)} />
+                <Panel titulo="Órdenes enviadas sin confirmar" enlace="/ordenes">
+                    {enviadasSinConfirmar.length === 0 ? (
+                        <EstadoOk texto="No hay órdenes esperando recepción." />
+                    ) : (
+                        <ul className="divide-y divide-slate-100">
+                            {enviadasSinConfirmar.slice(0, 6).map((o) => {
+                                const d = dias(o.createdAt)
+                                return (
+                                    <li
+                                        key={o._id}
+                                        onClick={() => navigate('/ordenes')}
+                                        className="flex cursor-pointer items-center gap-3 px-5 py-3 hover:bg-slate-50"
+                                    >
+                                        <span className="font-mono text-sm font-semibold text-brand-700">{o.folio}</span>
+                                        <span className="min-w-0 flex-1 truncate text-sm text-navy-900">{o.proveedor}</span>
+                                        <span className="text-sm font-medium text-slate-700">{money(o.presupuestoEstimado)}</span>
+                                        <span
+                                            className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                                                d >= 7 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'
+                                            }`}
+                                            title="Días desde que se envió"
+                                        >
+                                            {d === 0 ? 'hoy' : `${d} d`}
+                                        </span>
+                                    </li>
+                                )
+                            })}
+                        </ul>
+                    )}
+                </Panel>
+
+                <Panel titulo="Recomendaciones pendientes" enlace="/ordenes">
+                    {recs.length === 0 ? (
+                        <EstadoOk texto="Sin faltantes por reasignar a otro proveedor." />
+                    ) : (
+                        <ul className="divide-y divide-slate-100">
+                            {recs.slice(0, 6).map((r) => (
+                                <li
+                                    key={r._id}
+                                    onClick={() => navigate('/ordenes')}
+                                    className="flex cursor-pointer items-center gap-3 px-5 py-3 hover:bg-slate-50"
+                                >
+                                    <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-amber-50 text-amber-600">
+                                        <IconAlerta width={16} height={16} />
+                                    </span>
+                                    <div className="min-w-0 flex-1">
+                                        <p className="truncate text-sm font-medium text-navy-900">
+                                            {r.proveedorSnap?.codigo || r.proveedor}
+                                        </p>
+                                        <p className="text-xs text-slate-500">
+                                            de {r.folioOrigen} · {r.items.length} material(es)
+                                        </p>
+                                    </div>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </Panel>
+            </div>
+
+            <div className="mt-6 grid gap-6 lg:grid-cols-2">
+                <ListaCotizaciones cots={listaCot.slice(0, 4)} onVer={(id) => navigate(`/cotizaciones/${id}`)} />
                 <ListaOrdenes ordenes={listaOrdenes.slice(0, 5)} onVer={() => navigate('/ordenes')} />
             </div>
+        </div>
+    )
+}
+
+// Estado "todo al día" dentro de un panel
+function EstadoOk({ texto }: { texto: string }) {
+    return (
+        <div className="flex items-center gap-3 px-5 py-6 text-sm text-emerald-700">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+                <IconCheck width={18} height={18} />
+            </span>
+            {texto}
         </div>
     )
 }
@@ -237,12 +319,18 @@ function ListaOrdenes({ ordenes, onVer }: { ordenes: { _id: string; folio: strin
     )
 }
 
-function Kpi({ titulo, valor, icono, enlace }: { titulo: string; valor: number; icono: ReactNode; enlace: string }) {
+function Kpi({ titulo, valor, icono, enlace }: { titulo: string; valor: number | string; icono: ReactNode; enlace: string }) {
     return (
         <Link to={enlace} className="flex items-center gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md">
-            <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-brand-50 text-brand-600">{icono}</span>
-            <div>
-                <p className="font-display text-2xl font-extrabold text-navy-900">{valor}</p>
+            <span className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600">{icono}</span>
+            <div className="min-w-0">
+                <p
+                    className={`truncate font-display font-extrabold text-navy-900 ${
+                        typeof valor === 'string' ? 'text-xl' : 'text-2xl'
+                    }`}
+                >
+                    {valor}
+                </p>
                 <p className="text-xs font-medium text-slate-500">{titulo}</p>
             </div>
         </Link>

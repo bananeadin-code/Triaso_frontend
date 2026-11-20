@@ -1,6 +1,6 @@
 import { isAxiosError } from 'axios'
 import api from '../lib/axios'
-import type { NuevoUsuario, Permisos, Rol, RolInfo, UsuarioAdmin } from '../types'
+import type { MatrizAccesos, NuevoUsuario, Permisos, Rol, RolInfo, UsuarioAdmin } from '../types'
 
 function manejarError(error: unknown, fallback: string): never {
     if (isAxiosError(error) && error.response) {
@@ -23,12 +23,24 @@ export async function crearUsuario(datos: NuevoUsuario) {
     }
 }
 
-export async function actualizarUsuario(id: string, datos: { rol?: Rol; permisos?: Permisos; activo?: boolean }) {
+export async function actualizarUsuario(
+    id: string,
+    datos: { rol?: Rol; permisos?: Permisos; activo?: boolean; accesosPersonalizados?: boolean; accesos?: MatrizAccesos }
+) {
     try {
         const { data } = await api.put(`/usuarios/${id}`, datos)
         return data
     } catch (error) {
         manejarError(error, 'Error al actualizar el usuario')
+    }
+}
+
+export async function resetearPassword(id: string, password: string) {
+    try {
+        const { data } = await api.put<{ mensaje: string }>(`/usuarios/${id}/password`, { password })
+        return data
+    } catch (error) {
+        manejarError(error, 'Error al restablecer la contraseña')
     }
 }
 

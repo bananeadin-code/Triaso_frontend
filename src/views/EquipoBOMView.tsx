@@ -6,13 +6,18 @@ import { actualizarEquipo, getEquipo } from '../api/EquiposAPI'
 import { getComponentes } from '../api/ComponentesAPI'
 import { useAuth } from '../hooks/useAuth'
 import { descargarReporte } from '../api/ReportesAPI'
-import { Button, CategoriaBadge, Select, Spinner } from '../components/ui'
+import { BarraGuardado, Button, CategoriaBadge, Select, Spinner } from '../components/ui'
+import { SelectBuscable } from '../components/SelectBuscable'
+import { CamposPersonalizadosForm, mismosDatos, useCamposModulo } from '../components/CamposPersonalizados'
 import { Modal } from '../components/Modal'
 import { IconBack, IconDownload, IconPlus, IconTrash } from '../components/icons'
 import type { BOMLinea, LineaInput, ResumenCategoria } from '../types'
 
 const mxn = (n: number) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n)
 const usd = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n)
+// "—" cuando el material no se compra en esa moneda (costo 0 = vacío)
+const mxnOr = (n: number) => (n > 0 ? mxn(n) : '—')
+const usdOr = (n: number) => (n > 0 ? usd(n) : '—')
 
 // Recalcula el resumen por categoría a partir de un subconjunto de líneas
 // (los importes de cada material ya incluyen el factor de cantidad de su línea).
@@ -46,14 +51,17 @@ export function EquipoBOMView() {
     const { id } = useParams<{ id: string }>()
     const navigate = useNavigate()
     const { usuario, puede } = useAuth()
-    const puedeEditar = puede('equipos', 'escritura')
+    // Cambiar la composición del BOM es una edición del equipo
+    const puedeEditar = puede('equipos', 'editar')
     const puedeReporte = !!usuario?.permisos.generarReportes
 
     const equipo = useQuery({ queryKey: ['equipo', id], queryFn: () => getEquipo(id!), enabled: !!id })
     const componentes = useQuery({ queryKey: ['componentes'], queryFn: getComponentes })
 
     const [lineas, setLineas] = useState<LineaInput[]>([])
+    const [pers, setPers] = useState<Record<string, unknown>>({})
     const [guardando, setGuardando] = useState(false)
+    const { campos: camposPers } = useCamposModulo('equipos')
 
     // Modo reparación: cotización parcial de solo algunos componentes del equipo
     const [modoReparacion, setModoReparacion] = useState(false)
@@ -69,6 +77,7 @@ export function EquipoBOMView() {
                     cantidad: l.cantidad,
                 }))
             )
+            setPers(equipo.data.personalizados ?? {})
         }
     }, [equipo.data])
 
@@ -81,7 +90,9 @@ export function EquipoBOMView() {
             })),
         [equipo.data]
     )
-    const hayCambios = JSON.stringify(lineas) !== JSON.stringify(lineasGuardadas)
+    const cambiaronLineas = JSON.stringify(lineas) !== JSON.stringify(lineasGuardadas)
+    const cambiaronPers = !mismosDatos(pers, equipo.data?.personalizados ?? {})
+    const hayCambios = cambiaronLineas || cambiaronPers
 
     if (equipo.isLoading || componentes.isLoading) return <Spinner label="Cargando BOM…" />
     if (!equipo.data) return null
@@ -121,7 +132,11 @@ export function EquipoBOMView() {
     const guardar = async () => {
         setGuardando(true)
         try {
-            const res = await actualizarEquipo(id!, { lineas })
+            // Solo se manda lo que cambió (así la bitácora no registra composiciones sin cambios)
+            const res = await actualizarEquipo(id!, {
+                ...(cambiaronLineas ? { lineas } : {}),
+                ...(cambiaronPers ? { personalizados: pers } : {}),
+            })
             toast.success(res.mensaje)
             equipo.refetch()
         } catch (e) {
@@ -181,6 +196,13 @@ export function EquipoBOMView() {
                 </div>
             </div>
 
+            {/* ===== Datos adicionales del equipo (campos personalizados) ===== */}
+            {camposPers.length > 0 && !modoReparacion && (
+                <div className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <CamposPersonalizadosForm campos={camposPers} valores={pers} onChange={setPers} disabled={!puedeEditar} columnas={3} />
+                </div>
+            )}
+
             {/* ===== Resumen de costos por categoría ===== */}
             <div className="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <div className="border-b border-slate-200 px-5 py-3">
@@ -227,14 +249,7 @@ export function EquipoBOMView() {
                 <div className="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                     <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
                         <h2 className="font-display text-lg font-bold text-navy-900">Composición del equipo</h2>
-                        <div className="flex items-center gap-3">
-                            {hayCambios && (
-                                <span className="text-xs font-medium text-amber-600">Cambios sin guardar</span>
-                            )}
-                            <Button onClick={guardar} disabled={guardando || !hayCambios}>
-                                {guardando ? 'Guardando…' : 'Guardar composición'}
-                            </Button>
-                        </div>
+                        {cambiaronLineas && <span className="text-xs font-medium text-amber-600">Cambios sin guardar</span>}
                     </div>
 
                     <div className="divide-y divide-slate-100">
@@ -331,13 +346,13 @@ export function EquipoBOMView() {
                                                     )}
                                                 </td>
                                                 <td className="px-4 py-2 text-slate-500">{m.unidad}</td>
-                                                <td className="px-4 py-2 text-right text-slate-600">{mxn(m.costoMXN)}</td>
-                                                <td className="px-4 py-2 text-right text-slate-600">{usd(m.costoUSD)}</td>
+                                                <td className="px-4 py-2 text-right text-slate-600">{mxnOr(m.costoMXN)}</td>
+                                                <td className="px-4 py-2 text-right text-slate-600">{usdOr(m.costoUSD)}</td>
                                                 <td className="px-4 py-2 text-right font-medium text-slate-800">
-                                                    {mxn(m.importeMXN)}
+                                                    {mxnOr(m.importeMXN)}
                                                 </td>
                                                 <td className="px-4 py-2 text-right font-medium text-slate-800">
-                                                    {usd(m.importeUSD)}
+                                                    {usdOr(m.importeUSD)}
                                                 </td>
                                             </tr>
                                         ))}
@@ -348,6 +363,20 @@ export function EquipoBOMView() {
                     ))
                 )}
             </div>
+
+            {/* Guardar la composición siempre a la vista, aunque se revise el BOM más abajo */}
+            {puedeEditar && !modoReparacion && (
+                <BarraGuardado
+                    hayCambios={hayCambios}
+                    guardando={guardando}
+                    onGuardar={guardar}
+                    onDescartar={() => {
+                        setLineas(lineasGuardadas)
+                        setPers(equipo.data?.personalizados ?? {})
+                    }}
+                    etiqueta="Guardar cambios"
+                />
+            )}
 
             {modalRepAbierto && (
                 <ReparacionModal
@@ -430,26 +459,32 @@ function AgregarLinea({
     const [cantidad, setCantidad] = useState(1)
 
     const seleccionado = componentes.find((c) => c._id === comp)
+    const opcionesComp = useMemo(
+        () =>
+            componentes.map((c) => ({
+                value: c._id,
+                label: c.concepto,
+                detalle: `${c.variaciones.length} variación${c.variaciones.length === 1 ? '' : 'es'}`,
+            })),
+        [componentes]
+    )
 
     return (
         <div className="flex flex-wrap items-end gap-2">
-            <div>
-                <label className="mb-1 block text-xs font-medium text-slate-500">Componente</label>
-                <Select
+            <div className="w-full sm:w-72">
+                <span className="mb-1 block text-xs font-medium text-slate-500">Componente</span>
+                <SelectBuscable
                     value={comp}
-                    onChange={(e) => {
-                        setComp(e.target.value)
-                        setVariacion('')
+                    onChange={(v) => {
+                        setComp(v)
+                        // Si solo tiene una variación, se preselecciona
+                        const c = componentes.find((x) => x._id === v)
+                        setVariacion(c?.variaciones.length === 1 ? c.variaciones[0]._id ?? '' : '')
                     }}
-                    className="min-w-48"
-                >
-                    <option value="">Selecciona…</option>
-                    {componentes.map((c) => (
-                        <option key={c._id} value={c._id}>
-                            {c.concepto}
-                        </option>
-                    ))}
-                </Select>
+                    opciones={opcionesComp}
+                    placeholder="Buscar componente…"
+                    aria-label="Componente"
+                />
             </div>
             <div>
                 <label className="mb-1 block text-xs font-medium text-slate-500">Variación</label>

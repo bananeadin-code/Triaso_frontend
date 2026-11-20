@@ -19,7 +19,7 @@ export async function getComponente(id: string) {
     return data
 }
 
-export async function crearComponente(datos: { concepto: string; descripcion?: string }) {
+export async function crearComponente(datos: { concepto: string; descripcion?: string; personalizados?: Record<string, unknown> }) {
     try {
         const { data } = await api.post('/componentes', datos)
         return data
@@ -30,7 +30,7 @@ export async function crearComponente(datos: { concepto: string; descripcion?: s
 
 export async function actualizarComponente(
     id: string,
-    datos: { concepto?: string; descripcion?: string; variaciones?: Variacion[] }
+    datos: { concepto?: string; descripcion?: string; variaciones?: Variacion[]; personalizados?: Record<string, unknown> }
 ) {
     try {
         const { data } = await api.put(`/componentes/${id}`, datos)

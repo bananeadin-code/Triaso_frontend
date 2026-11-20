@@ -1,11 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'react-toastify'
 import { actualizarComponente, getComponente } from '../api/ComponentesAPI'
 import { getMateriales, getCategorias } from '../api/MaterialesAPI'
+import { getConfiguracion } from '../api/ConfiguracionAPI'
 import { useAuth } from '../hooks/useAuth'
-import { Button, CategoriaBadge, Field, Input, Select, Spinner } from '../components/ui'
+import { BarraGuardado, CategoriaBadge, Field, Input, Spinner } from '../components/ui'
+import { SelectBuscable } from '../components/SelectBuscable'
+import { opcionesMaterial } from '../lib/opciones'
+import { CamposPersonalizadosForm, mismosDatos, useCamposModulo } from '../components/CamposPersonalizados'
 import { IconBack, IconPlus, IconTrash } from '../components/icons'
 import type { CategoriaId, MaterialAsignado, Variacion } from '../types'
 
@@ -15,30 +19,46 @@ export function ComponenteEditorView() {
     const { id } = useParams<{ id: string }>()
     const navigate = useNavigate()
     const { puede } = useAuth()
-    const puedeEditar = puede('componentes', 'escritura')
+    // Todo el editor (concepto, variaciones, materiales) se guarda como edición del componente
+    const puedeEditar = puede('componentes', 'editar')
 
     const componente = useQuery({ queryKey: ['componente', id], queryFn: () => getComponente(id!), enabled: !!id })
     const materiales = useQuery({ queryKey: ['materiales'], queryFn: getMateriales })
     const categorias = useQuery({ queryKey: ['categorias'], queryFn: getCategorias })
+    const config = useQuery({ queryKey: ['configuracion'], queryFn: getConfiguracion })
+    const unidades = config.data?.unidades ?? []
 
     const [concepto, setConcepto] = useState('')
     const [descripcion, setDescripcion] = useState('')
     const [variaciones, setVariaciones] = useState<Variacion[]>([])
+    const [pers, setPers] = useState<Record<string, unknown>>({})
     const [guardando, setGuardando] = useState(false)
+    const { campos: camposPers } = useCamposModulo('componentes')
 
-    useEffect(() => {
-        if (componente.data) {
-            setConcepto(componente.data.concepto)
-            setDescripcion(componente.data.descripcion)
-            setVariaciones(componente.data.variaciones)
-        }
-    }, [componente.data])
+    // Carga (o restablece) el formulario con lo guardado en el servidor
+    const restablecer = () => {
+        if (!componente.data) return
+        setConcepto(componente.data.concepto)
+        setDescripcion(componente.data.descripcion)
+        setVariaciones(componente.data.variaciones)
+        setPers(componente.data.personalizados ?? {})
+    }
+    useEffect(restablecer, [componente.data])
 
     if (componente.isLoading || materiales.isLoading || categorias.isLoading)
         return <Spinner label="Cargando componente…" />
 
     const catMateriales = materiales.data ?? []
     const cats = categorias.data ?? []
+
+    // ¿Lo que hay en pantalla difiere de lo guardado?
+    const guardado = componente.data
+    const hayCambios =
+        !!guardado &&
+        (concepto !== guardado.concepto ||
+            descripcion !== guardado.descripcion ||
+            JSON.stringify(variaciones) !== JSON.stringify(guardado.variaciones) ||
+            !mismosDatos(pers, guardado.personalizados ?? {}))
 
     // ---------- operaciones sobre el árbol ----------
     const addVariacion = () =>
@@ -95,7 +115,7 @@ export function ComponenteEditorView() {
         }
         setGuardando(true)
         try {
-            const res = await actualizarComponente(id!, { concepto, descripcion, variaciones })
+            const res = await actualizarComponente(id!, { concepto, descripcion, variaciones, personalizados: pers })
             toast.success(res.mensaje)
             componente.refetch()
         } catch (e) {
@@ -115,7 +135,7 @@ export function ComponenteEditorView() {
             </button>
 
             {/* Encabezado */}
-            <div className="mb-6 flex flex-wrap items-end justify-between gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex flex-1 flex-wrap gap-4">
                     <div className="min-w-56 flex-1">
                         <Field label="Concepto del componente" required>
@@ -132,10 +152,10 @@ export function ComponenteEditorView() {
                         </Field>
                     </div>
                 </div>
-                {puedeEditar && (
-                    <Button onClick={guardar} disabled={guardando}>
-                        {guardando ? 'Guardando…' : 'Guardar cambios'}
-                    </Button>
+                {camposPers.length > 0 && (
+                    <div className="mt-4">
+                        <CamposPersonalizadosForm campos={camposPers} valores={pers} onChange={setPers} disabled={!puedeEditar} columnas={3} />
+                    </div>
                 )}
             </div>
 
@@ -223,12 +243,22 @@ export function ComponenteEditorView() {
                                                 />
                                             </td>
                                             <td className="px-3 py-2">
-                                                <input
+                                                <select
                                                     value={m.unidad}
                                                     disabled={!puedeEditar}
                                                     onChange={(e) => updateMaterial(vi, mi, 'unidad', e.target.value)}
-                                                    className="w-20 rounded border border-slate-300 px-2 py-1 text-sm disabled:bg-transparent disabled:border-transparent"
-                                                />
+                                                    className="w-24 rounded border border-slate-300 px-2 py-1 text-sm disabled:border-transparent disabled:bg-transparent"
+                                                >
+                                                    {/* Conserva el valor actual aunque ya no esté en el catálogo */}
+                                                    {m.unidad && !unidades.includes(m.unidad) && (
+                                                        <option value={m.unidad}>{m.unidad}</option>
+                                                    )}
+                                                    {unidades.map((u) => (
+                                                        <option key={u} value={u}>
+                                                            {u}
+                                                        </option>
+                                                    ))}
+                                                </select>
                                             </td>
                                             <td className="px-3 py-2 text-right">
                                                 <CellNumber
@@ -273,7 +303,11 @@ export function ComponenteEditorView() {
 
                         {puedeEditar && (
                             <div className="border-t border-slate-200 px-5 py-3">
-                                <AgregarMaterial materiales={catMateriales} onAdd={(mid) => addMaterial(vi, mid)} />
+                                <AgregarMaterial
+                                    materiales={catMateriales}
+                                    yaAgregados={va.materiales.map((m) => String(m.material ?? ''))}
+                                    onAdd={(mid) => addMaterial(vi, mid)}
+                                />
                             </div>
                         )}
                     </div>
@@ -287,6 +321,11 @@ export function ComponenteEditorView() {
                 >
                     <IconPlus /> Agregar variación
                 </button>
+            )}
+
+            {/* Guardar siempre a la vista, aunque se edite muy abajo */}
+            {puedeEditar && (
+                <BarraGuardado hayCambios={hayCambios} guardando={guardando} onGuardar={guardar} onDescartar={restablecer} />
             )}
         </div>
     )
@@ -319,36 +358,35 @@ function CellNumber({
     )
 }
 
-// Selector para agregar un material del catálogo a la variación
+// Selector con buscador para agregar un material del catálogo a la variación:
+// al elegirlo se agrega de inmediato (busca por clave, concepto o proveedor).
 function AgregarMaterial({
     materiales,
+    yaAgregados,
     onAdd,
 }: {
-    materiales: { _id: string; clave: string; concepto: string }[]
+    materiales: { _id: string; clave: string; concepto: string; proveedorPrincipal?: { codigo?: string } | null }[]
+    yaAgregados: string[]
     onAdd: (id: string) => void
 }) {
-    const [sel, setSel] = useState('')
+    const opciones = useMemo(
+        () =>
+            opcionesMaterial(materiales).map((o) =>
+                yaAgregados.includes(o.value)
+                    ? { ...o, detalle: [o.detalle, 'ya en esta variación'].filter(Boolean).join(' · ') }
+                    : o
+            ),
+        [materiales, yaAgregados]
+    )
     return (
-        <div className="flex items-center gap-2">
-            <Select value={sel} onChange={(e) => setSel(e.target.value)} className="max-w-md">
-                <option value="">+ Agregar material del catálogo…</option>
-                {materiales.map((m) => (
-                    <option key={m._id} value={m._id}>
-                        {m.clave} · {m.concepto}
-                    </option>
-                ))}
-            </Select>
-            <Button
-                variant="secondary"
-                onClick={() => {
-                    if (sel) {
-                        onAdd(sel)
-                        setSel('')
-                    }
-                }}
-            >
-                <IconPlus /> Añadir
-            </Button>
+        <div className="max-w-md">
+            <SelectBuscable
+                value=""
+                onChange={(id) => id && onAdd(id)}
+                opciones={opciones}
+                placeholder="+ Agregar material del catálogo…"
+                aria-label="Agregar material del catálogo"
+            />
         </div>
     )
 }

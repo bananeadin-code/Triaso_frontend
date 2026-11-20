@@ -1,6 +1,6 @@
 import { isAxiosError } from 'axios'
 import api from '../lib/axios'
-import type { OrdenCompra, OrdenItemInput, OrdenListItem, Recomendacion } from '../types'
+import type { OrdenCompra, OrdenItemInput, OrdenListItem, Paginado, Recomendacion } from '../types'
 
 function manejarError(error: unknown, fallback: string): never {
     if (isAxiosError(error) && error.response) {
@@ -9,8 +9,16 @@ function manejarError(error: unknown, fallback: string): never {
     throw new Error(fallback)
 }
 
+// Lista completa (panel de inicio)
 export async function getOrdenes() {
     const { data } = await api.get<OrdenListItem[]>('/ordenes')
+    return data
+}
+
+// Página de órdenes con filtros (el servidor filtra y pagina)
+export async function getOrdenesPagina(pagina: number, limite: number, filtros: { q?: string; estado?: string }) {
+    const params = Object.fromEntries(Object.entries({ ...filtros, pagina, limite }).filter(([, v]) => v !== undefined && v !== ''))
+    const { data } = await api.get<Paginado<OrdenListItem>>('/ordenes', { params })
     return data
 }
 
@@ -25,6 +33,7 @@ export async function crearOrden(datos: {
     presupuestoEstimado?: number
     notas?: string
     materialesGlobal?: string[]
+    personalizados?: Record<string, unknown>
 }) {
     try {
         const { data } = await api.post('/ordenes', datos)
@@ -36,7 +45,7 @@ export async function crearOrden(datos: {
 
 export async function actualizarOrden(
     id: string,
-    datos: { items?: OrdenItemInput[]; presupuestoEstimado?: number; notas?: string; materialesGlobal?: string[] }
+    datos: { items?: OrdenItemInput[]; presupuestoEstimado?: number; notas?: string; materialesGlobal?: string[]; personalizados?: Record<string, unknown> }
 ) {
     try {
         const { data } = await api.put(`/ordenes/${id}`, datos)
@@ -55,12 +64,12 @@ export async function eliminarOrden(id: string) {
     }
 }
 
-export async function limpiarOrdenesCompletadas() {
+export async function cancelarOrden(id: string, motivo?: string) {
     try {
-        const { data } = await api.delete<{ mensaje: string; eliminadas: number }>('/ordenes/limpiar/completadas')
+        const { data } = await api.put<{ mensaje: string }>(`/ordenes/${id}/cancelar`, { motivo })
         return data
     } catch (error) {
-        manejarError(error, 'Error al limpiar las órdenes')
+        manejarError(error, 'Error al cancelar la orden')
     }
 }
 
