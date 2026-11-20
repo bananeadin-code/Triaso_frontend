@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'react-toastify'
-import { actualizarUsuario, crearUsuario, eliminarUsuario, getUsuarios, resetearPassword } from '../api/UsuariosAPI'
+import { actualizarUsuario, crearUsuario, eliminarUsuario, getBitacora, getUsuarios, restablecerPassword } from '../api/UsuariosAPI'
 import { useAuth } from '../hooks/useAuth'
 import { Button, EmptyState, Field, Input, PageHeader, Select, Spinner } from '../components/ui'
 import { IconLock, IconPlus, IconTrash } from '../components/icons'
 import { MODULO_LABEL, ROL_LABEL } from '../types'
-import type { AccesoModulo, MatrizAccesos, Modulo, Permisos, Rol, RolInfo, UsuarioAdmin } from '../types'
+import type { AccesoModulo, MatrizAccesos, Modulo, Permisos, RegistroBitacora, Rol, RolInfo, UsuarioAdmin } from '../types'
 
 const ROL_STYLE: Record<Rol, string> = {
     admin: 'bg-navy-900 text-white',
@@ -26,6 +26,7 @@ export function UsuariosView() {
     const [editando, setEditando] = useState<UsuarioAdmin | null>(null)
     const [reseteando, setReseteando] = useState<UsuarioAdmin | null>(null)
     const [creando, setCreando] = useState(false)
+    const [pestana, setPestana] = useState<'usuarios' | 'bitacora'>('usuarios')
 
     const invalidar = () => queryClient.invalidateQueries({ queryKey: ['usuarios'] })
 
@@ -53,6 +54,23 @@ export function UsuariosView() {
                 }
             />
 
+            <div className="mb-4 flex gap-1 border-b border-slate-200">
+                {(['usuarios', 'bitacora'] as const).map((p) => (
+                    <button
+                        key={p}
+                        onClick={() => setPestana(p)}
+                        className={`-mb-px border-b-2 px-4 py-2 text-sm font-semibold ${
+                            pestana === p ? 'border-brand-600 text-brand-700' : 'border-transparent text-slate-500 hover:text-slate-700'
+                        }`}
+                    >
+                        {p === 'usuarios' ? 'Usuarios' : 'Bitácora'}
+                    </button>
+                ))}
+            </div>
+
+            {pestana === 'bitacora' ? (
+                <Bitacora />
+            ) : (
             <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 {usuarios.length === 0 ? (
                     <EmptyState titulo="Sin usuarios" descripcion="Crea el primer usuario del sistema." />
@@ -139,10 +157,11 @@ export function UsuariosView() {
                     </div>
                 )}
             </div>
+            )}
 
             {creando && <UsuarioModal roles={roles} onClose={() => setCreando(false)} onDone={invalidar} />}
             {editando && <EditarModal usuario={editando} roles={roles} onClose={() => setEditando(null)} onDone={invalidar} />}
-            {reseteando && <ResetPasswordModal usuario={reseteando} onClose={() => setReseteando(null)} />}
+            {reseteando && <ResetPasswordModal usuario={reseteando} onClose={() => setReseteando(null)} onDone={invalidar} />}
         </div>
     )
 }
@@ -172,6 +191,7 @@ function UsuarioModal({ roles, onClose, onDone }: { roles: RolInfo[]; onClose: (
     const [permisos, setPermisos] = useState<Permisos>({ generarReportes: false })
     const [personalizado, setPersonalizado] = useState(false)
     const [matriz, setMatriz] = useState<MatrizAccesos>(() => copiarMatriz(roles.find((r) => r.clave === 'capturista')!.matriz))
+    const [debeCambiar, setDebeCambiar] = useState(true)
 
     const crear = useMutation({
         mutationFn: () =>
@@ -181,6 +201,7 @@ function UsuarioModal({ roles, onClose, onDone }: { roles: RolInfo[]; onClose: (
                 password,
                 rol,
                 permisos,
+                debeCambiarPassword: debeCambiar,
                 ...(rol !== 'admin' && personalizado ? { accesosPersonalizados: true, accesos: matriz } : {}),
             }),
         onSuccess: () => {
@@ -208,6 +229,10 @@ function UsuarioModal({ roles, onClose, onDone }: { roles: RolInfo[]; onClose: (
                 <Field label="Contraseña" required error={password && password.length < 6 ? 'Mínimo 6 caracteres' : undefined}>
                     <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Contraseña inicial" />
                 </Field>
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input type="checkbox" checked={debeCambiar} onChange={(e) => setDebeCambiar(e.target.checked)} className="h-4 w-4" />
+                    Pedir cambio de contraseña al primer acceso
+                </label>
 
                 <RolSelect roles={roles} rol={rol} onChange={setRol} info={info} />
                 <MatrizPermisos
@@ -291,14 +316,15 @@ function EditarModal({ usuario, roles, onClose, onDone }: { usuario: UsuarioAdmi
 }
 
 // ---------- Restablecer contraseña (admin, en cualquier momento) ----------
-function ResetPasswordModal({ usuario, onClose }: { usuario: UsuarioAdmin; onClose: () => void }) {
+function ResetPasswordModal({ usuario, onClose, onDone }: { usuario: UsuarioAdmin; onClose: () => void; onDone: () => void }) {
     const [password, setPassword] = useState('')
     const [ver, setVer] = useState(false)
 
     const guardar = useMutation({
-        mutationFn: () => resetearPassword(usuario._id, password),
+        mutationFn: () => restablecerPassword(usuario._id, password),
         onSuccess: (r) => {
             toast.success(r?.mensaje ?? 'Contraseña restablecida')
+            onDone()
             onClose()
         },
         onError: (e: Error) => toast.error(e.message),
@@ -307,8 +333,8 @@ function ResetPasswordModal({ usuario, onClose }: { usuario: UsuarioAdmin; onClo
     return (
         <ModalShell titulo="Restablecer contraseña" onClose={onClose}>
             <p className="mb-4 text-sm text-slate-600">
-                Fija una contraseña nueva para <span className="font-semibold text-navy-900">{usuario.nombre}</span> (
-                {usuario.email}). Comunícasela; podrá cambiarla después desde <span className="font-medium">Mi perfil</span>.
+                Asigna una contraseña <strong>temporal</strong> a <span className="font-semibold text-navy-900">{usuario.nombre}</span> (
+                {usuario.email}) y compártela. Sus sesiones abiertas se cerrarán y el sistema le pedirá cambiarla al entrar.
             </p>
 
             <Field label="Nueva contraseña" required error={password && password.length < 6 ? 'Mínimo 6 caracteres' : undefined}>
@@ -350,6 +376,49 @@ function ResetPasswordModal({ usuario, onClose }: { usuario: UsuarioAdmin; onClo
                 </Button>
             </div>
         </ModalShell>
+    )
+}
+
+// ---------- Bitácora de gestión de usuarios ----------
+const ACCION_LABEL: Record<RegistroBitacora['accion'], { texto: string; estilo: string }> = {
+    alta: { texto: 'Alta', estilo: 'bg-emerald-100 text-emerald-700' },
+    baja: { texto: 'Baja', estilo: 'bg-red-100 text-red-700' },
+    cambio: { texto: 'Cambio', estilo: 'bg-blue-100 text-blue-700' },
+    password: { texto: 'Contraseña', estilo: 'bg-amber-100 text-amber-700' },
+}
+
+function Bitacora() {
+    const { data, isLoading } = useQuery({ queryKey: ['usuarios', 'bitacora'], queryFn: getBitacora })
+    if (isLoading || !data) return <Spinner label="Cargando bitácora…" />
+    if (data.length === 0) {
+        return (
+            <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+                <EmptyState titulo="Sin movimientos" descripcion="Aquí aparecerán las altas, bajas y cambios de usuarios." />
+            </div>
+        )
+    }
+    return (
+        <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white shadow-sm">
+            {data.map((r) => (
+                <div key={r._id} className="px-4 py-3 text-sm">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${ACCION_LABEL[r.accion].estilo}`}>
+                            {ACCION_LABEL[r.accion].texto}
+                        </span>
+                        <span className="font-semibold text-navy-900">{r.afectado}</span>
+                        <span className="ml-auto text-xs text-slate-400">{new Date(r.createdAt).toLocaleString('es-MX')}</span>
+                    </div>
+                    {r.detalle.length > 0 && (
+                        <ul className="mt-1 list-inside list-disc text-xs text-slate-600">
+                            {r.detalle.map((d, i) => (
+                                <li key={i}>{d}</li>
+                            ))}
+                        </ul>
+                    )}
+                    <p className="mt-1 text-xs text-slate-400">Por {r.actor}</p>
+                </div>
+            ))}
+        </div>
     )
 }
 

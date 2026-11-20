@@ -65,6 +65,7 @@ export interface Usuario {
     operaciones?: MatrizAccesos
     personalizado?: boolean
     permisos: Permisos
+    debeCambiarPassword: boolean
 }
 
 // ===== Gestión de usuarios (módulo del admin) =====
@@ -96,6 +97,17 @@ export interface NuevoUsuario {
     permisos: Permisos
     accesosPersonalizados?: boolean
     accesos?: MatrizAccesos
+    // Contraseña temporal: el usuario deberá cambiarla al entrar (el backend asume true si se omite)
+    debeCambiarPassword?: boolean
+}
+
+export interface RegistroBitacora {
+    _id: string
+    actor: string
+    accion: 'alta' | 'baja' | 'cambio' | 'password'
+    afectado: string
+    detalle: string[]
+    createdAt: string
 }
 
 // ===== Categorías (configurables: la empresa puede editarlas/agregarlas/quitarlas) =====

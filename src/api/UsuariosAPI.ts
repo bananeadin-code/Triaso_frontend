@@ -1,6 +1,6 @@
 import { isAxiosError } from 'axios'
 import api from '../lib/axios'
-import type { MatrizAccesos, NuevoUsuario, Permisos, Rol, RolInfo, UsuarioAdmin } from '../types'
+import type { MatrizAccesos, NuevoUsuario, Permisos, RegistroBitacora, Rol, RolInfo, UsuarioAdmin } from '../types'
 
 function manejarError(error: unknown, fallback: string): never {
     if (isAxiosError(error) && error.response) {
@@ -35,7 +35,16 @@ export async function actualizarUsuario(
     }
 }
 
-export async function resetearPassword(id: string, password: string) {
+export async function eliminarUsuario(id: string) {
+    try {
+        const { data } = await api.delete<{ mensaje: string }>(`/usuarios/${id}`)
+        return data
+    } catch (error) {
+        manejarError(error, 'Error al eliminar el usuario')
+    }
+}
+
+export async function restablecerPassword(id: string, password: string) {
     try {
         const { data } = await api.put<{ mensaje: string }>(`/usuarios/${id}/password`, { password })
         return data
@@ -44,11 +53,7 @@ export async function resetearPassword(id: string, password: string) {
     }
 }
 
-export async function eliminarUsuario(id: string) {
-    try {
-        const { data } = await api.delete<{ mensaje: string }>(`/usuarios/${id}`)
-        return data
-    } catch (error) {
-        manejarError(error, 'Error al eliminar el usuario')
-    }
+export async function getBitacora() {
+    const { data } = await api.get<RegistroBitacora[]>('/usuarios/bitacora')
+    return data
 }

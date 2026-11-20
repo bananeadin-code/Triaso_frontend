@@ -16,7 +16,10 @@ api.interceptors.request.use((config) => {
 // Sesión expirada / token inválido: si el backend responde 401 y creíamos estar
 // autenticados, se limpia el token y se manda al login (evita que la app quede
 // mostrando errores con una sesión muerta). El 403 (sin permiso de módulo) NO
-// cierra sesión: eso lo manejan los guardas de ruta redirigiendo al panel.
+// cierra sesión: eso lo manejan los guardas de ruta redirigiendo al panel, y además se
+// avisa con EVENTO_ACCESO para refrescar el perfil y el menú (p. ej. el admin le cambió el rol).
+export const EVENTO_ACCESO = 'triaso:acceso-cambiado'
+
 function cerrarSesion() {
     localStorage.removeItem('TRIASO_TOKEN')
     if (!window.location.pathname.startsWith('/login')) {
@@ -40,6 +43,8 @@ api.interceptors.response.use(
             // (El resto de 403 —sin permiso de módulo— NO cierra sesión: lo manejan los guardas.)
             if (status === 401 || (status === 403 && mensaje === 'Usuario desactivado')) {
                 cerrarSesion()
+            } else if (status === 403) {
+                window.dispatchEvent(new Event(EVENTO_ACCESO))
             }
         }
         return Promise.reject(error)
